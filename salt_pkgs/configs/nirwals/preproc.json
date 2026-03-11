@@ -1,0 +1,27 @@
+{
+    "header_cleanups": [
+    	{
+           	"include": {
+           		"PROPID": ["CAL_", "ENG_", "JUNK"]
+           	},
+       		"keys": ["BLOCKID", "BVISITID"],
+    	    "values": {"BLOCKID": "NONE", "BVISITID": ""},
+    	    "note": "General clean-up of BLOCKID and BVISITID which are incorrectly carried over from the last telescope pointing by the detector software for configurations without a telescope pointing."
+        }
+    ],
+	"header_copies": [
+		{
+			"source": "GRRANGLE",
+			"key": "GR-ANGLE",
+			"comment": "Grating angle (encoder)"
+		},
+		{
+			"source": "CAMANG",
+			"key": "AR-ANGLE",
+			"comment": "Articulation angle (encoder)"
+		}
+	],
+	"validations": [],
+    "data_fixes_note": "",
+    "data_fixes": []
+}

@@ -1,0 +1,11 @@
+{
+	"data_dir": "nirwals",
+	"wrk_dir": "NIRWALS_work",
+	"sub_dirs": {
+		"fibres": "fibres",
+		"Arc": "reference_spectra",
+		"Sky": "sky_spectra",
+		"Science": "science_spectra"
+	},
+	"raw_prefix": "N"
+}

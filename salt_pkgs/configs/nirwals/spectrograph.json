@@ -1,0 +1,30 @@
+{
+    "name": "NIRWALS",
+    "type": "longslit-ifu-nir",
+	"detector": {
+		"name": "NIRWALS",
+		"xpos": 0.05,
+		"ypos": 0.0,
+		"xbin": 1,
+		"ybin": 1,
+		"chip": [
+			{"name": "H2RG", "xpix": 2048, "ypix": 2048, "pix_size": 0.018, "xpos": 0.0, "ypos": 0.0}
+		]
+	},
+	"camera": {"name": "NIRWALS", "focal_length": 219.2},
+	"collimator": {"name": "NIRWALS", "focal_length": 629.0},
+	"gratings": [
+		{"name": "NG950", "gr_type": "transmission", "spacing": 949.7, "gr_ang": 0.0, "ar_ang": 0.0}
+	],
+	"slit": {"name": "IFU-PSEUDO", "phi": 1.33, "width": 0.0},
+	"telescope": {"name": "SALT", "focal_length": 46200.0},
+	"factors": {"da": 0.0, "mF": 0.0},
+	"binning_key": "PIXSUM",
+	"notes": [
+		"detector: xbin and ybin are set from the FITS header entry PIXSUM",
+		"gratings: gr_ang and ar_ang are set from the FITS header entries GR-ANGLE and AR-ANGLE",
+		"slit: phi (width in arcseconds) is set as the width of the fibres making up the pseudo-slit",
+		"slit: width (in mm) is calculated after the slit is initialised"
+	],
+	"notes_extra": []
+}

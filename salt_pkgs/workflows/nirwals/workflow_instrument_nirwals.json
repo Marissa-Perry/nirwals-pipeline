@@ -1,0 +1,88 @@
+{
+    "type": "workflow",
+    "name": "workflow_instrument_nirwals.json",
+    "description": "nirwals processing",
+    "process": "single",
+    "log_file": "nirwals.log",
+    "status": 1,
+    "tasks": [
+        {
+            "type": "module",
+            "name": "saltpipeline.primary.instrument.prepare_data",
+            "description": "instrument data preparation",
+            "process": "single",
+            "status": 1,
+            "params": "params_nirwals.json",
+            "actions": [
+                {
+                    "type": "procedure",
+                    "name": "remove_temporary_data",
+                    "status": 1
+                },
+                {
+                    "type": "procedure",
+                    "name": "copy_data_to_work_dir",
+                    "status": 1
+                }
+            ],
+            "stats": {"success": 2, "failure": 12, "populate": []}
+        },
+        {
+            "type": "module",
+            "name": "saltpipeline.primary.instrument.preprocess_data",
+            "description": "instrument data preprocessing",
+            "process": "single",
+            "status": 1,
+            "params": "params_nirwals.json",
+            "actions": [
+                {
+                    "type": "procedure",
+                    "name": "update_header_keywords",
+                    "status": 1
+                },
+                {
+                    "type": "procedure",
+                    "name": "check_proposal_codes",
+                    "status": 1
+                },
+                {
+                    "type": "procedure",
+                    "name": "check_validations",
+                    "status": 1
+                }
+            ],
+            "stats": {"success": 0, "failure": 0, "populate": []}
+        },
+        {
+            "type": "module",
+            "name": "saltpipeline.primary.instrument.prereduce_data",
+            "description": "instrument data prereductions",
+            "process": "single",
+            "status": 1,
+            "params": "params_nirwals.json",
+            "actions": [
+                {
+                    "type": "procedure",
+                    "name": "prereduce_darks",
+                    "status": 1
+                },
+                {
+                    "type": "procedure",
+                    "name": "prereduce_flats",
+                    "status": 1
+                },
+                {
+                    "type": "procedure",
+                    "name": "prereduce_arcs",
+                    "status": 1
+                },
+                {
+                    "type": "procedure",
+                    "name": "prereduce_science",
+                    "status": 1
+                }
+            ],
+            "stats": {"success": 3, "failure": 13, "populate": []}
+        }
+    ]
+}

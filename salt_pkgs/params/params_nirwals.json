@@ -1,0 +1,17 @@
+{
+    "instrument": "nirwals",
+    "detectors": [
+        {
+            "name": "ndet",
+            "computer": "",
+            "source_dir": "nirwals",
+            "data_dir": "nirwals",
+            "file_prefix": "N",
+            "file_nr_frmt": "ramp",
+            "auto_junk": "nirwals/auto_junk.json",
+            "preprocess": "nirwals/preproc.json",
+            "modes": "nirwals/modes.json",
+			"use_fitsio": 0
+        }
+    ]
+}

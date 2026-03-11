@@ -1,0 +1,11 @@
+[
+    {
+        "name": "standard",
+        "keywords": ["Normal", "NORMAL"],
+        "file_extensions": {"raw": "fits", "wrk": "fits"},
+        "file_min_size": 0,
+        "fits_config": "",
+        "prered_config": "nirwals/prered.json",
+        "prd_prefix" : ["ph", "dph"]
+    }
+]

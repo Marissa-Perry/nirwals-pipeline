@@ -1,0 +1,19 @@
+{
+    "name": "NIRWALS fits prepare parameters",
+	"procedure_key": "DETMODE",
+	"validate_key": "INSTRUME",
+    "entries": [
+        {
+			"procedure": "NORMAL",
+			"validate": "NIRWALS",
+			"data_exts": [{"name": "SCI", "nr": 1}],
+			"create_var": 0,
+			"bad_pixel_mask": 1,
+			"prefix": "nirwals/bpm/NIRWALS",
+			"tag": "Bpm",
+			"bpm_file_key_list": ["PIXSUM"],
+			"bpm_check_key_list": ["INSTRUME", "PIXSUM", "NAXIS1", "NAXIS2"],
+			"bpm_check_keys": {"INSTRUME": "{primary}", "PIXSUM": "{primary}", "NAXIS1": "{sci}", "NAXIS2": "{sci}"}
+        }
+    ]
+}

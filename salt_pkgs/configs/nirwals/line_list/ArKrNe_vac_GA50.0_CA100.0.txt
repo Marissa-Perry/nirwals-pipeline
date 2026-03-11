@@ -1,0 +1,80 @@
+#
+# Argon-Krypton-Neon (ArKrNe) Spectral Lines
+#
+# NOTES: The relative intensities retrieved from NIST Atomic Spectra Database
+#        were adjusted for the SALT calsys intensities OR TO GET GOOD FIT.
+#        The intesity of a line in chip gap, on edge of chip gap or edge of
+#        frame is set as zero. Lines with zero intensity will not be fitted.
+#
+# ---------------------------------------------------------------------------- #
+#   Lambda   Intensity   Comment
+# ---------------------------------------------------------------------------- #
+#
+ 15000.000      0.0000   dummy line to improve first real line
+#
+ 15559.710      0.0001   Ar                                     NIST & NIRSPEC
+#15561.400      0.0001   Xe
+ 15608.478      0.0001   Ne
+ 15639.250      0.0001   Kr                                     NIST & NIRSPEC
+ 15685.280      0.0200   Kr                                     NIST & NIRSPEC
+#15691.070      0.0000   Kr too weak                            NIST & NIRSPEC
+ 15726.900      0.0001   Xe
+ 15739.208      0.0001   Ar                                     NIST & NIRSPEC
+ 15765.356      0.0001   Ne
+ 15775.750      0.0001   Kr                                     NIST & NIRSPEC
+ 15780.924      0.0001   Ar                                     NIST & NIRSPEC
+ 15806.965      0.0001   Ne
+ 15816.501      0.0001   Ne
+ 15821.099      0.0001   Ar                                     NIST & NIRSPEC
+ 15824.412      0.0100   Kr                                     NIST & NIRSPEC
+#15827.180      0.0000   Kr close to stronger Kr 15824.412      NIST & NIRSPEC
+#15870.800      0.0001   Xe
+ 15887.510      0.0001   Ar                                     NIRSPEC only
+#15887.600      0.0001   Ar
+ 15895.020      0.0050   Kr                                     NIST & NIRSPEC
+ 15904.031      0.0001   Ar                                     NIST & NIRSPEC
+ 15930.130      0.0001   Kr                                     NIST & NIRSPEC
+#15983.900      0.0001   Xe
+ 15993.860      0.0001   Ar                                     NIST & NIRSPEC
+ 16027.147      0.0001   Ne
+#16044.300      0.0001   Xe
+ 16049.882      0.0001   Ne
+#16056.410      0.0001   Xe
+#16056.700      0.0001   Kr too weak                            NIST & NIRSPEC
+#16057.670      0.0001   Xe
+#16090.500      0.0001   Kr too weak                            NIST only
+ 16102.884      0.0001   Ne
+ 16113.730      0.0001   Kr                                     NIST & NIRSPEC
+ 16127.061      0.0001   Ar                                     NIST & NIRSPEC
+ 16184.443      0.0001   Ar                                     NIST & NIRSPEC
+#16248.740      0.0001   Kr too weak                            NIST & NIRSPEC
+ 16257.112      0.0001   Ne
+#16268.035      0.0001   Ne use Ar 16268.513
+ 16268.513      0.0001   Ar                                     NIST & NIRSPEC
+#16268.691      0.0001   Ne use Ar 16268.513
+#16272.797      0.0001   Ne use Ne 16273.400
+ 16273.400      0.0001   Ne
+ 16319.715      0.0001   Kr                                     NIST & NIRSPEC
+#16351.388      0.0001   Ne use Kr 16351.390
+ 16351.390      0.0001   Kr                                     NIST & NIRSPEC
+ 16441.065      0.0001   Ar                                     NIST & NIRSPEC
+ 16409.737      0.0001   Ne
+ 16428.149      0.0001   Ne
+ 16470.370      0.0001   Kr                                     NIST & NIRSPEC
+ 16473.492      0.0001   Ne
+ 16479.254      0.0001   Ne
+ 16524.370      0.0001   Ar                                     NIST & NIRSPEC
+ 16532.602      0.0001   Ne
+ 16553.828      0.0001   Ar                                     NIST & NIRSPEC
+#16554.921      0.0001   Ar use Ar 16553.828                    NIST & NIRSPEC
+#16559.000      0.0001   Xe
+ 16567.400      0.1000   Kr                                     NIST only
+ 16577.580      0.0001   Kr                                     NIST & NIRSPEC
+ 16596.041      0.0001   Ne
+ 16638.594      0.0001   Ne
+#16662.180      0.0001   Xe
+#16669.700      0.0001   Xe
+ 16671.664      0.0001   Ne
+#
+ 17000.000      0.0000   dummy line to improve last real line
+# ---------------------------------------------------------------------------- #

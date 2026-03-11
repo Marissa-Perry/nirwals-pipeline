@@ -1,0 +1,31 @@
+#
+# Krypton (Kr) Spectral Lines
+#
+# NOTES: The relative intensities retrieved from NIST Atomic Spectra Database
+#        were adjusted for the SALT calsys intensities OR TO GET GOOD FIT.
+#        The intesity of a line in chip gap, on edge of chip gap or edge of
+#        frame is set as zero. Lines with zero intensity will not be fitted.
+#
+# ---------------------------------------------------------------------------- #
+#   Lambda   Intensity   Comment
+# ---------------------------------------------------------------------------- #
+#
+  7500.000      0.0000   dummy line to improve first real line
+#
+  8106.595      0.0642   Kr
+  8115.132      0.2320   Kr
+  8192.308      0.1232   Kr
+  8265.514      0.0000   Kr blended
+  8283.328      0.0417   Kr
+  8300.391      0.2835   Kr
+  8500.540      0.0000   Kr weak
+  8511.211      0.0921   Kr
+  8779.161      1.0000   Kr
+  8931.145      0.8118   Kr
+  9354.800      0.0052   Kr
+  9364.670      0.0045   Kr
+#
+  9706.880      0.0069   Kr
+#
+ 10000.000      0.0000   dummy line to improve last real line
+# ---------------------------------------------------------------------------- #

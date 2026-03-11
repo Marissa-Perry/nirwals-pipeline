@@ -1,0 +1,44 @@
+{
+    "type": "workflow",
+    "name": "workflow_science_nirwals_prepare.json",
+    "description": "nir spectrograph science reduction pipeline: preparations",
+    "process": "single",
+    "log_file": "science-nirwals-prepare.log",
+    "status": 1,
+    "tasks": [
+        {
+            "type": "module",
+            "name": "saltreduce.science.nirwals.prepare_data",
+            "description": "prepare nir spectrograph flat field data",
+            "process": "single",
+            "status": 1,
+            "params": "params_nirwals_science.json",
+            "actions": [
+                {
+                    "type": "procedure",
+                    "name": "prepare_flat_fit",
+                    "params": {"config": "nirwals/science_prepare.json", "recalc": 1},
+                    "status": 1
+                }
+            ],
+            "stats": {"success": 0, "failure": 0, "populate": []}
+        },
+        {
+            "type": "module",
+            "name": "saltreduce.science.nirwals.prepare_data",
+            "description": "prepare nir spectrograph fibres config",
+            "process": "single",
+            "status": 1,
+            "params": "params_nirwals_science.json",
+            "actions": [
+                {
+                    "type": "procedure",
+                    "name": "prepare_fibres_config",
+                    "params": {"config": "nirwals/science_prepare.json", "recalc": 1},
+                    "status": 1
+                }
+            ],
+            "stats": {"success": 0, "failure": 0, "populate": []}
+        }
+    ]
+}

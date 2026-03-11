@@ -1,0 +1,25 @@
+{
+    "name": "NIRWALS flat fielding parameters",
+    "date": "1999-01-01",
+	"flat_field": {
+		"on": 1,
+		"provisos": [
+			{
+				"key_combos": [
+					["DETNAM", "OBSTYPE"]
+				],
+				"valid": [
+					["NDET", "Arc"],
+					["NDET", "Sky"],
+					["NDET", "Science"]
+				]
+			}
+		]
+	},
+	"combine_key_list": ["PIXSUM", "GRATING", "CAMANG", "GRTILT"],
+	"bpm": {
+		"prefix": "nirwals/bpm/NIRWALS",
+		"tag": "Bpm",
+		"key_list": ["PIXSUM"]
+	}
+}

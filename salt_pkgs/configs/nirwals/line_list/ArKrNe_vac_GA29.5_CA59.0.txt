@@ -1,0 +1,56 @@
+#
+# Argon-Krypton-Neon (ArKrNe) Spectral Lines
+#
+# NOTES: The relative intensities retrieved from NIST Atomic Spectra Database
+#        were adjusted for the SALT calsys intensities OR TO GET GOOD FIT.
+#        The intesity of a line in chip gap, on edge of chip gap or edge of
+#        frame is set as zero. Lines with zero intensity will not be fitted.
+#
+# ---------------------------------------------------------------------------- #
+#   Lambda   Intensity   Comment
+# ---------------------------------------------------------------------------- #
+#
+  9000.000      0.0000   dummy line to improve first real line
+#
+  9660.435      0.5556   Ar
+  9668.071      0.0448   Ne
+  9706.880      0.0074   Kr
+  9754.435      1.0000   Kr
+  9787.186      0.1225   Ar
+  9858.940      0.0450   Kr
+ 10054.820      0.0031   Ar
+#10298.238      0.0000   Ne close to stronger Kr 10299.750
+ 10299.750      0.0057   Kr
+ 10335.550      0.0000   Ar too weak
+ 10363.210      0.0075   Kr
+ 10472.923      0.2181   Ar
+ 10480.905      0.0168   Ar
+ 10509.380      0.0000   Ar too weak
+ 10565.303      0.0449   Ne
+ 10595.940      0.0107   Kr
+ 10623.574      0.0044   Ne
+ 10676.489      0.0776   Ar
+ 10684.699      0.0095   Ar
+ 10736.810      0.0000   Ar too weak
+ 10769.036      0.0000   Ne too weak
+ 10783.484      0.0000   Ne too weak
+ 10801.001      0.0261   Ne
+#10809.318      0.0000   Ne close to stronger 10801.001
+#10811.089      0.0000   Ne blended
+#10817.717      0.0000   Ne close to stronger 10822.783
+ 10822.783      0.0008   Ne
+ 10847.448      0.0409   Ne
+ 10877.880      0.0229   Kr
+ 10883.900      0.0000   *Ar too weak, don't plot
+#10889.259      0.0000   Ne blended
+#10891.374      0.0000   Ne blended
+#10894.134      0.0000   Ne blended
+ 10895.300      0.0000   Ar too weak
+ 10953.725      0.0032   Ar
+ 11023.898      0.0000   Ne too weak
+ 11052.748      0.0000   Ne too weak
+ 11081.903      0.0075   Ar
+ 11109.500      0.0000   Ar too weak
+#
+ 12000.000      0.0000   dummy line to improve last real line
+# ---------------------------------------------------------------------------- #

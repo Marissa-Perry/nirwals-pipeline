@@ -1,0 +1,22 @@
+# Python/Jupyter Notebook
+__pycache__/
+.ipynb_checkpoints/
+*.py[cod]
+
+# all date directories
+20*/
+# but keep the directory structure
+!20*/.gitkeep
+
+# debugging notebooks
+wrappers/*.ipynb
+# all functions used to edit .fits files (primary reduced data)
+wrappers/generate*.py 
+# obs log data for generating obs log file (produced in primary data reduction)
+wrappers/obs_log_info/
+
+# Log files
+*.log
+
+# macOS
+.DS_Store

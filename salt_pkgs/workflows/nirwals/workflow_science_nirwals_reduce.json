@@ -1,0 +1,39 @@
+{
+    "type": "workflow",
+    "name": "workflow_science_nirwals_reduce.json",
+    "description": "nir spectrograph science reduction pipeline: reductions",
+    "process": "single",
+    "log_file": "science-nirwals-reduce.log",
+    "status": 1,
+    "tasks": [
+        {
+            "type": "module",
+            "name": "saltreduce.science.nirwals.reduce_data",
+            "description": "reduce nir spectrograph data",
+            "process": "single",
+            "status": 1,
+            "params": "params_nirwals_science.json",
+            "actions": [
+                {
+                    "type": "procedure",
+                    "name": "reduce_arc",
+                    "params": {"config": "nirwals/science_reduce.json", "recalc": 1, "prd_prefix": "dph"},
+                    "status": 1
+                },
+                {
+                    "type": "procedure",
+                    "name": "reduce_sky",
+                    "params": {"config": "nirwals/science_reduce.json", "recalc": 0, "prd_prefix": "dph"},
+                    "status": 1
+                },
+                {
+                    "type": "procedure",
+                    "name": "reduce_object",
+                    "params": {"config": "nirwals/science_reduce.json", "recalc": 0, "prd_prefix": "dph"},
+                    "status": 1
+                }
+            ],
+            "stats": {"success": 0, "failure": 0, "populate": []}
+        }
+    ]
+}

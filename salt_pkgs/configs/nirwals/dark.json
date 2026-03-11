@@ -1,0 +1,22 @@
+{
+    "name": "NIRWALS dark correction parameters",
+    "date": "1999-01-01",
+	"subtract_dark": {
+		"on": 1,
+		"provisos": [
+			{
+				"key_combos": [
+					["DETNAM", "OBSTYPE"]
+				],
+				"valid": [
+					["NDET", "Flat field"],
+					["NDET", "Arc"],
+					["NDET", "Sky"],
+					["NDET", "Science"]
+				]
+			}
+		]
+	},
+	"combine_key_list": ["PIXSUM", "USEREXP"],
+	"raise_error": {"not_found": 0}
+}

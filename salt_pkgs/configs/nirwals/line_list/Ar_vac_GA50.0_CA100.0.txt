@@ -1,0 +1,45 @@
+#
+# Argon (Ar) Spectral Lines
+#
+# NOTES: The relative intensities retrieved from NIST Atomic Spectra Database
+#        were adjusted for the SALT calsys intensities OR TO GET GOOD FIT.
+#        The intesity of a line in chip gap, on edge of chip gap or edge of
+#        frame is set as zero. Lines with zero intensity will not be fitted.
+#
+# ---------------------------------------------------------------------------- #
+#   Lambda   Intensity   Comment
+# ---------------------------------------------------------------------------- #
+#
+ 15000.000      0.0000   dummy line to improve first real line
+#
+ 15559.710      0.0001   Ar                                     NIST & NIRSPEC
+#15652.083      0.0001   ArII
+ 15739.208      0.0001   Ar                                     NIST & NIRSPEC
+ 15780.924      0.0001   Ar                                     NIST & NIRSPEC
+ 15821.099      0.0001   Ar                                     NIST & NIRSPEC
+ 15887.510      0.0001   Ar                                     NIRSPEC only
+#15887.600      0.0001   Ar
+ 15904.031      0.0001   Ar                                     NIST & NIRSPEC
+#15940.710      0.0001   ArII
+ 15993.860      0.0001   Ar                                     NIST & NIRSPEC
+#16109.419      0.0001   ArII
+ 16127.061      0.0001   Ar                                     NIST & NIRSPEC
+#16156.821      0.0001   ArII
+ 16184.443      0.0001   Ar                                     NIST & NIRSPEC
+ 16268.513      0.0001   Ar                                     NIST & NIRSPEC
+#16281.765      0.0001   ArII
+#16291.016      0.0001   ArII
+#16315.918      0.0001   ArII
+#16367.090      0.0001   ArII
+#16421.239      0.0001   ArII
+ 16441.065      0.0001   Ar                                     NIST & NIRSPEC
+#16474.900      0.0000   ArII
+#16498.577      0.0001   ArII
+ 16524.370      0.0001   Ar                                     NIST & NIRSPEC
+ 16553.828      0.0001   Ar                                     NIST & NIRSPEC
+#16554.921      0.0001   Ar use Ar 16553.828                    NIST & NIRSPEC
+#16564.980      0.0001   ArII
+#16657.960      0.0001   ArII
+#
+ 17000.000      0.0000   dummy line to improve last real line
+# ---------------------------------------------------------------------------- #

@@ -1,0 +1,34 @@
+#
+# Krypton (Kr) Spectral Lines
+#
+# NOTES: The relative intensities retrieved from NIST Atomic Spectra Database
+#        were adjusted for the SALT calsys intensities OR TO GET GOOD FIT.
+#        The intesity of a line in chip gap, on edge of chip gap or edge of
+#        frame is set as zero. Lines with zero intensity will not be fitted.
+#
+# ---------------------------------------------------------------------------- #
+#   Lambda   Intensity   Comment
+# ---------------------------------------------------------------------------- #
+#
+ 15000.000      0.0000   dummy line to improve first real line
+#
+ 15639.250      0.0001   Kr                                     NIST & NIRSPEC
+ 15685.280      0.0200   Kr                                     NIST & NIRSPEC
+#15691.070      0.0000   Kr too weak                            NIST & NIRSPEC
+ 15775.750      0.0001   Kr                                     NIST & NIRSPEC
+ 15824.412      0.0100   Kr                                     NIST & NIRSPEC
+#15827.180      0.0000   Kr close to stronger Kr 15824.412      NIST & NIRSPEC
+ 15895.020      0.0050   Kr                                     NIST & NIRSPEC
+ 15930.130      0.0001   Kr                                     NIST & NIRSPEC
+#16056.700      0.0001   Kr too weak                            NIST & NIRSPEC
+#16090.500      0.0001   Kr too weak                            NIST only
+ 16113.730      0.0001   Kr                                     NIST & NIRSPEC
+#16248.740      0.0001   Kr too weak                            NIST & NIRSPEC
+ 16319.715      0.0001   Kr                                     NIST & NIRSPEC
+ 16351.390      0.0001   Kr                                     NIST & NIRSPEC
+ 16470.370      0.0001   Kr                                     NIST & NIRSPEC
+ 16567.400      0.1000   Kr                                     NIST only
+ 16577.580      0.0001   Kr                                     NIST & NIRSPEC
+#
+ 17000.000      0.0000   dummy line to improve last real line
+# ---------------------------------------------------------------------------- #

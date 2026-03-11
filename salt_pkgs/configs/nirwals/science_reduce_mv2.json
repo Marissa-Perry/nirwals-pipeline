@@ -1,0 +1,335 @@
+{
+    "debug": 0,
+    "check_combined_solution": 0,
+
+    "NOTES": [
+        "a. Re smoothing parameters: window_length must be > polyorder + 1 for smooting to be applied.",
+        "b. The trace[fit] entry in nirwals/science_reduce.json must be the same as the trace[fit] entry in nirwals/science_prepare.json!"
+    ],
+
+	"output": {"dir": "", "plot_wavelength_fit": 1, "plot_zero_points_fit": 1, "plot_continuum_fit": 0},
+    "product": {"dir": ""},
+
+    "reduce_arc": {"exp_type": "Arc"},
+    "reduce_sky": {"exp_type": "Sky"},
+    "reduce_object": {"exp_type": "Science"},
+
+    "spectrograph": "nirwals/spectrograph.json",
+    "solutions_db": "nirwals/wavelength_solutions.json",
+    "solutions_wrk": "wavelength_solutions.json",
+    "fibre_traces_db": "nirwals/fibre_traces.json",
+    "fibre_traces_wrk": "fibre_traces.json",
+    "exposures_wrk": "exposures.json",
+
+    "wavelength_key": "vac",
+    "line_lists": {
+        "ar": "nirwals/line_list/Ar_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"kr": "nirwals/line_list/Kr_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"ne": "nirwals/line_list/Ne_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"arkr": "nirwals/line_list/ArKr_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"krar": "nirwals/line_list/ArKr_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"arkrne": "nirwals/line_list/ArKrNe_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"arnekr": "nirwals/line_list/ArKrNe_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"krarne": "nirwals/line_list/ArKrNe_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"krnear": "nirwals/line_list/ArKrNe_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"nearkr": "nirwals/line_list/ArKrNe_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"nekrar": "nirwals/line_list/ArKrNe_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
+		"sky": "nirwals/line_list/SkyLines.txt"
+	},
+    "line_lists_base": {
+		"ar": "nirwals/line_list/Ar_{wavelength_key}.txt",
+		"kr": "nirwals/line_list/Kr_{wavelength_key}.txt",
+		"ne": "nirwals/line_list/Ne_{wavelength_key}.txt",
+		"arkr": "nirwals/line_list/ArKr_{wavelength_key}.txt",
+		"krkr": "nirwals/line_list/ArKr_{wavelength_key}.txt",
+		"arkrne": "nirwals/line_list/ArKrNe_{wavelength_key}.txt",
+		"arnekr": "nirwals/line_list/ArKrNe_{wavelength_key}.txt",
+		"krarne": "nirwals/line_list/ArKrNe_{wavelength_key}.txt",
+		"krnear": "nirwals/line_list/ArKrNe_{wavelength_key}.txt",
+		"nearkr": "nirwals/line_list/ArKrNe_{wavelength_key}.txt",
+		"nekrar": "nirwals/line_list/ArKrNe_{wavelength_key}.txt"
+	},
+    "lamps": {
+		"ar": "Argon",
+		"kr": "Krypton",
+		"ne": "Neon",
+        "arkr": "Argon-Krypton",
+        "krar": "Argon-Krypton",
+        "arkrne": "Argon-Krypton-Neon",
+        "arnekr": "Argon-Krypton-Neon",
+        "krarne": "Argon-Krypton-Neon",
+        "krnear": "Argon-Krypton-Neon",
+        "nearkr": "Argon-Krypton-Neon",
+        "nekrar": "Argon-Krypton-Neon"
+    },
+
+	"artificial_spectrum": {"res": 10.0, "dres": 0.1, "wrange": []},
+    "artificial_spectrums": {
+        "ar": {"res": 10.0, "dres": 0.1, "wrange": []},
+        "kr": {"res": 10.0, "dres": 0.1, "wrange": []},
+        "ne": {"res": 10.0, "dres": 0.1, "wrange": []}
+    },
+
+    "trace": {
+        "fit": {"function": "polynomial", "order": 2, "niter": 5}
+    },
+
+    "wavelength": {
+        "fit": {"function": "legendre", "order": 5, "niter": 5},
+        "fit_keywords": {
+            "pad": 15,
+            "fit_zero_point": {
+                "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+                "dc": 20
+            },
+            "match_line_list": {
+                "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+                "dc": 20, "width": 3, "height": 150, "snr": 2.0, "sections": 3, "wtol": 10.0, "mtol": 5.0, "tol": 2.0, "res": 1.5, "min": 10
+            },
+            "debug": {"wavelength_range": 0, "flux_peaks": 0, "line_list": 0, "spectrum_region": 0, "match_line": 0}
+        },
+        "extend": 70
+    },
+    "match_line_list": {
+		"ar": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 5.0, "tol": 2.0, "res": 1.5, "min": 10
+        },
+		"ar_alt": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"kr": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"ne": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 5.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"ne_alt": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"arkr": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"krar": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"arkrne": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"arnekr": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"krarne": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"krnear": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"nearkr": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        },
+		"nekrar": {
+            "xcor": {"step": 20, "best": 0, "int_type": "interp"},
+            "dc": 20, "width": 3, "height": 150, "snr": 1.5, "sections": 3, "wtol": 10.0, "mtol": 15.0, "tol": 5.0, "res": 1.5, "min": 10
+        }
+    },
+    "zero_points": {
+        "fit": {"function": "polynomial", "low_reject": 2.5, "high_reject": 2.5, "order": 2, "niter": 5},
+	    "sigma_clip_residuals": {"sigma": 2.0, "cenfunc": "median"},
+        "skip_rows": {"bottom": 5, "top": 5},
+        "tolerance": 5.0,
+        "find_peaks": {"height": 1000.0, "width": 5, "wlen": 15, "rel_height": 0.8},
+        "offset_tolerance": 1.5
+    },
+    "ar_ang_adjust": {"ar_ang": [59.0, 67.0, 74.0, 82.0, 90.0, 100.00], "adjust": [0.000000, 0.000150, 0.000250, 0.000350, 0.000475, 0.000625]},
+
+    "smooth": {
+        "arc": {"window_length": 5, "polyorder": 3}
+    },
+
+    "flat": {
+        "file": "",
+        "type": {"arc": "none", "sky": "none", "science": "none"},
+        "notes": [
+            "a. type = 'none' | 'flat' | 'fit';",
+            "b. none: no flat correction applied;",
+            "c. flat: divide by combined flat image;",
+            "d. fit: divide by combined flat fit image;",
+            "e. blank will be treated as 'none';",
+            "f. type for 'sky' and 'science' MUST be the same"
+        ]
+    },
+
+	"continuum": {
+        "arc": {
+            "sigma_clip": {"sigma": 2.5, "cenfunc": "median"},
+            "fit": {"function": "polynomial", "order": 2, "low_reject": 3, "high_reject": 2, "niter": 5},
+            "notes": ["1. 'cols' are used to masked row flux used in fit"],
+            "cols": [4, 2045]
+        },
+        "sci": {
+            "sigma_clip": {},
+            "fit": {"function": "legendre", "order": 21, "low_reject": 3, "high_reject": 2, "niter": 10},
+            "notes": [
+                "a. row masking is done for the determined row mask which takes into account the curvature of the rectification;",
+                "b. all row masks constitute 'image_mask' which is used to mask columns in spectral channels fit"
+            ]
+        }
+    },
+
+    "spectral_channels": {
+        "fit": {"function": "legendre", "order": 1, "low_reject": 3, "high_reject": 2, "niter": 10},
+        "notes": [
+            "a. column masking is done using the determined 'image_mask';",
+            "b. order = 1 to get a flat line fit value (should be very close to a clipped mean)"
+        ],
+        "gpm": {
+            "threshold": {
+                "type": "value",
+                "notes": [
+                    "a. type: 'auto' | 'value';",
+                    "b. if 'auto': thresh = scale * stddev(spectral_fit_sky) where spectral_fit_sky was sigma clipped;",
+                    "c. if 'value': thresh = value"
+                ],
+                "auto": {"sigma_clip": {"sigma": 2.5, "cenfunc": "median"}, "scale": 1.0},
+                "value": 0.1
+            }
+        }
+    },
+
+    "config_key": {
+        "lists": {
+            "wrk_config": ["PIXSUM", "GRATING", "CAMANG", "GRTILT", "BVISITID"],
+            "db_config": ["PIXSUM", "GRATING", "CAMANG", "GRTILT"]
+        },
+        "frmts": [
+            {"key": "PIXSUM", "type": "replace", "frmt": [" ", "x"]},
+            {"key": "GRATING", "type": "", "frmt": ""},
+            {"key": "CAMANG", "type": "format", "frmt": "CA{0}"},
+            {"key": "GRTILT", "type": "format", "frmt": "GA{0}"},
+            {"key": "BVISITID", "type": "format", "frmt": "BV{0}"}
+        ]
+    },
+
+    "centre_id": "126",
+    "nr_of_blocks": 8,
+    "nr_of_fibres": 247,
+    "nr_of_object_fibres": 211,
+    "nr_of_sky_fibres": 36,
+    "row_repeat": 100,
+    "apply_gpm": 1,
+
+    "w_mod": {"min": 0.0, "max": 0.0, "tol": 15.0}, "w_rms_tol": {"min": 0.0001, "max": 0.75}, "z_rms_tol": {"min": 0.0001, "max": 0.75},
+
+    "obs_date": "", "exp_type": "", "recalc": 0, "raw_prefix": "",
+
+    "arc": {},
+    "science": {},
+
+    "solution": {
+        "reference": "",
+        "lamp": "",
+        "fit": {},
+        "pm": [],
+        "wm": [],
+        "w_coef": [],
+        "w_rms": 0.0,
+        "w_min": 0.0,
+        "w_max": 0.0,
+        "z_coef": [],
+        "z_rms": 0.0,
+        "fibre_offsets": {},
+        "n": 0,
+        "added": ""
+    },
+
+    "image_mask": [],
+
+    "exposures": {},
+    "exposures_keys": {"cs": "continuum subtracted", "cf": "continuum fit", "sf": "spectral channels fit"},
+
+    "plotting": {
+        "arc": {
+            "figsize": [16, 9],
+            "title": "",
+            "title_frmt": "{file}: Lamp = {lamp}, Grating = {grating}, Grating tilt = {grtilt}, Camera angle = {camang}, Fibre id = {fibre}",
+            "title_ypos": -0.1,
+            "xlabel": "",
+            "ylabel": "Relative flux",
+            "xlim": {"min": 0, "max": 0, "min_factor": 1.0, "max_factor": 1.0},
+            "ylim": {"min": 0, "max": 0, "min_factor": -0.025, "max_factor": 1.025},
+            "arc_spectrum": {"label": "Arc spectrum ('centre' fibre)", "linestyle": "-", "linewidth": 0.75, "color": "black"},
+            "artificial_spectrum": {"label": "Artificial spectrum (lamp)", "linestyle": "-", "linewidth": 0.5, "color": "red"},
+            "matched_lines": {"label": "Matched lines", "linestyle": "--", "linewidth": 0.75, "color": "blue", "ymin": 0.0, "ymax": 1.0},
+            "masked_lines": {"label": "Un-matched lines", "linestyle": "--", "linewidth": 0.5, "color": "black", "ymin": 0.0, "ymax": 1.0},
+            "annotate": {"textcoords": "offset points", "xytext": [0,10], "ha": "center", "fontsize": 8, "rotation": "vertical"},
+            "annotate_pos": "top",
+            "legend_order": "alphabetic",
+            "legend": {"loc": "upper right"},
+            "save": 1,
+            "show": 0
+        },
+        "residuals": {
+            "figsize": [16, 9],
+            "title": "",
+            "title_frmt": "{file}: Lamp = {lamp}, Grating = {grating}, Grating tilt = {grtilt}, Camera angle = {camang}, Function = {function}, Order = {order}, RMS = {rms:.4f}, Fibre id = {fibre}",
+            "title_ypos": -0.325,
+            "xlabel": "Wavelength [$\\mathrm{\\AA}$]",
+            "ylabel": "Residual [$\\mathrm{\\AA}$]",
+            "xlim": {"min": 0, "max": 0, "min_factor": 1.0, "max_factor": 1.0},
+            "ylim": {"min": 0, "max": 0, "min_factor": -1.025, "max_factor": 1.025},
+            "residuals": {"label": "Residuals", "marker": "+", "linewidth": 1.0, "color": "red"},
+            "zero_line": {"linestyle": "--", "linewidth": 0.5, "color": "black"},
+            "legend_order": [0],
+            "legend": {"loc": "upper right"},
+            "save": 1,
+            "show": 0
+        },
+        "zero_points_fit": {
+            "figsize": [12, 9],
+            "title": "",
+            "title_frmt": "Zero points fit - {file}: Function = {function}, Order = {order}, RMS = {rms:.4f}",
+            "title_ypos": -0.1,
+            "xlabel": "Zero point [$\\mathrm{\\AA}$]",
+            "ylabel": "Row",
+            "xlim": {"min": 0, "max": 0, "min_factor": 0.99975, "max_factor": 1.00025},
+            "ylim": {"min": 0, "max": 0, "min_factor": -0.025, "max_factor": 1.025},
+            "zero_points": {"label": "Zero points", "marker": "+", "linewidth": 1.0, "color": "red"},
+            "fit": {"label": "Zero points fit", "linestyle": "--", "linewidth": 0.5, "color": "blue"},
+            "legend_order": [1, 0],
+            "legend": {"loc": "upper right"},
+            "save": 1,
+            "show": 0
+        },
+        "continuum_fit": {
+            "figsize": [16, 9],
+            "title": "",
+            "title_frmt": "Continuum fit - {file}: Function = {function}, Order = {order}, {tag} id = {id}",
+            "title_ypos": -0.1,
+            "xlabel": "Column [pixel]",
+            "ylabel": "Relative flux",
+            "xlim": {"min": 0, "max": 0, "min_factor": 1.0, "max_factor": 1.0},
+            "ylim": {"min": 0, "max": 0, "min_factor": -0.05, "max_factor": 1.025},
+            "spectrum": {"label": "Spectrum", "linestyle": "-", "linewidth": 1.0, "color": "black"},
+            "clip": {"label": "Spectrum - clipped", "linestyle": "-", "linewidth": 1.0, "color": "red"},
+            "fit": {"label": "Continuum fit", "linestyle": "--", "linewidth": 1.0, "color": "blue"},
+            "subtract": {"label": "Spectrum: Continuum fit subtracted", "linestyle": "-", "linewidth": 1.0, "color": "green"},
+            "zero_line": {"linestyle": "--", "linewidth": 0.5, "color": "black"},
+            "legend_order": [0, 1, 2, 3],
+            "legend": {"loc": "upper right"},
+            "save": 0,
+            "show": 0
+        }
+    }
+}

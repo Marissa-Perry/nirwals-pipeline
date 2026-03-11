@@ -1,0 +1,68 @@
+{
+    "prereductions": {
+    	"hack": {"key": "", "config": {"file": "nirwals/hack.json", "procedure": ""}},
+    	"prepare": {"key": "SPREPARE", "config": {"file": "nirwals/var_bpm.json", "procedure": ""}},
+    	"dark_correct": {"key": "SDARK", "config": {"file": "nirwals/dark.json", "procedure": ""}},
+    	"flat_field": {"key": "SFLAT", "config": {"file": "nirwals/flat.json", "procedure": ""}}
+    },
+    "exp_types": [
+        {
+            "tag": "dark",
+            "keywords": ["Dark"],
+            "prereductions": ["hack", "prepare"],
+            "combine": {
+                "on": 1,
+                "provisos": [],
+                "method": "median",
+                "proc_key": "SCOMBINE",
+                "key_list": ["PIXSUM", "USEREXP"],
+                "key_combine": []
+            },
+	        "prd_prefix": "ph"
+        },
+        {
+            "tag": "flat",
+            "keywords": ["Flat field"],
+            "prereductions": ["hack", "prepare", "dark_correct"],
+            "combine": {
+                "on": 1,
+                "provisos": [],
+                "method": "median",
+                "proc_key": "SCOMBINE",
+                "key_list": ["PIXSUM", "GRATING", "CAMANG", "GRTILT", "BVISITID"],
+                "key_combine": []
+            },
+	        "prd_prefix": "dph"
+        },
+        {
+            "tag": "arc",
+            "keywords": ["Arc"],
+            "prereductions": ["hack", "prepare", "dark_correct"],
+            "combine": {
+                "on": 1,
+                "provisos": [{"key_combos": [["LAMPID"]], "valid": [["Ar"], ["Kr"], ["Ne"]]}],
+                "method": "sum",
+                "scale": {"method": "median", "normalise": 1},
+                "proc_key": "SCOMBINE",
+                "key_list": ["PIXSUM", "GRATING", "CAMANG", "GRTILT", "BVISITID"],
+                "key_combine": ["LAMPID"]
+            },
+	        "prd_prefix": "dph"
+        },
+        {
+            "tag": "science",
+            "keywords": ["Sky", "Science"],
+            "prereductions": ["hack", "prepare", "dark_correct"],
+            "combine": {
+                "on": 0,
+                "provisos": [],
+                "method": "",
+                "proc_key": "",
+                "key_list": [],
+                "key_combine": []
+            },
+ 	        "prd_prefix": "dph"
+        }
+    ],
+    "notes": ""
+}

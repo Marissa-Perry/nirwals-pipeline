@@ -1,0 +1,50 @@
+#
+# Neon (Ne) Spectral Lines
+#
+# NOTES: The relative intensities retrieved from NIST Atomic Spectra Database
+#        were adjusted for the SALT calsys intensities OR TO GET GOOD FIT.
+#        The intesity of a line in chip gap, on edge of chip gap or edge of
+#        frame is set as zero. Lines with zero intensity will not be fitted.
+#
+# ---------------------------------------------------------------------------- #
+#   Lambda   Intensity   Comment
+# ---------------------------------------------------------------------------- #
+#
+ 15000.000      0.0000   dummy line to improve first real line
+#
+ 15608.478      0.0001   Ne
+ 15765.356      0.0001   Ne
+#15766.197      0.0001   NeII
+ 15806.965      0.0001   Ne
+ 15816.501      0.0001   Ne
+#15842.344      0.0001   NeII
+#15921.216      0.0001   NeII
+#15932.999      0.0001   NeII
+ 16027.147      0.0001   Ne
+#16027.613      0.0001   NeII
+ 16049.882      0.0001   Ne
+ 16102.884      0.0001   Ne
+#16234.097      0.0001   NeII
+ 16257.112      0.0001   Ne
+#16268.035      0.0001   Ne use Ne 16268.691
+ 16268.691      0.0001   Ne
+#16272.797      0.0001   Ne use Ne 16273.400
+#16273.207      0.0001   NeII
+ 16273.400      0.0001   Ne
+ 16351.388      0.0001   Ne
+ 16409.737      0.0001   Ne
+ 16428.149      0.0001   Ne
+ 16473.492      0.0001   Ne
+#16477.950      0.0001   NeII
+ 16479.254      0.0001   Ne
+ 16532.602      0.0001   Ne
+ 16596.041      0.0001   Ne
+#16611.556      0.0001   Ne too weak
+#16613.976      0.0000   Ne too weak
+#16633.219      0.0001   NeII
+ 16638.594      0.0001   Ne
+#16655.079      0.0001   NeII
+ 16671.664      0.0001   Ne
+#
+ 17000.000      0.0000   dummy line to improve last real line
+# ---------------------------------------------------------------------------- #

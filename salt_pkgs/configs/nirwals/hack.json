@@ -1,0 +1,63 @@
+{
+    "name": "NIRWALS data extension preparation for prereductions",
+    "date": "1999-01-01",
+    "actions": [
+        {
+            "name": "update_header_keywords",
+            "description": "update header keywords",
+            "params": {
+                "header_keywords": [
+                    {
+                        "key": "DETNAM",
+                        "old": "",
+                        "new": "NDET",
+                        "comment": "Detector Name"
+                    },
+                    {
+                        "key": "NAMPS",
+                        "old": "",
+                        "new": 1,
+                        "comment": "Number of amplifiers"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "add_header_keywords",
+            "description": "add header keywords",
+            "params": {
+                "header_keywords": [
+                    {
+                        "key": "PIXSUM",
+                        "type": "string",
+                        "source": "primary_key",
+                        "value": "",
+                        "comment": "On chip summation"
+                    },
+                    {
+                        "key": "GAIN",
+                        "type": "float",
+                        "source": "primary_key",
+                        "value": "",
+                        "comment": "Nominal gain (e/ADU)"
+                    },
+                    {
+                        "key": "RDNOISE",
+                        "type": "float",
+                        "source": "primary_key",
+                        "value": "",
+                        "comment": "Nominal readout noise in e"
+                    }
+                ]
+            }
+        },
+        {
+            "name": "flip_data_extensions",
+            "description": "flip data extensions",
+            "params": {
+                "flip_axis": 1,
+                "data_extensions": [1, 2, 3, 4, 5]
+            }
+        }
+    ]
+}

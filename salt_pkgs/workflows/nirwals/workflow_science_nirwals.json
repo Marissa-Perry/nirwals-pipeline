@@ -1,0 +1,30 @@
+{
+    "type": "workflow",
+    "name": "workflow_science_nirwals.json",
+    "description": "nir spectrograph science reduction pipeline",
+    "process": "single",
+    "log_file": "",
+    "status": 1,
+    "tasks": [
+        {
+            "type": "workflow",
+            "name": "workflow_science_nirwals_prepare.json",
+            "description": "nirwals science preparation processing",
+            "process": "single",
+            "status": 1,
+            "params": "",
+            "actions": [],
+            "stats": {"success": 0, "failure": 0, "populate": []}
+        },
+        {
+            "type": "workflow",
+            "name": "workflow_science_nirwals_reduce.json",
+            "description": "nirwals science reduction processing",
+            "process": "single",
+            "status": 1,
+            "params": "",
+            "actions": [],
+            "stats": {"success": 0, "failure": 0, "populate": []}
+        }
+    ]
+}

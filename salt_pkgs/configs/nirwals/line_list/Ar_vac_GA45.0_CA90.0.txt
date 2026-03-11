@@ -1,0 +1,39 @@
+#
+# Argon (Ar) Spectral Lines
+#
+# NOTES: The relative intensities retrieved from NIST Atomic Spectra Database
+#        were adjusted for the SALT calsys intensities OR TO GET GOOD FIT.
+#        The intesity of a line in chip gap, on edge of chip gap or edge of
+#        frame is set as zero. Lines with zero intensity will not be fitted.
+#
+# ---------------------------------------------------------------------------- #
+#   Lambda   Intensity   Comment
+# ---------------------------------------------------------------------------- #
+#
+ 13500.000      0.0000   dummy line to improve first real line
+#
+ 14253.100      0.0728   Ar
+ 14260.800      0.0000   *Ar weak
+ 14599.723      0.1398   Ar
+ 14600.461      0.0000   *Ar use Ar 14599.723
+#14638.414      0.0000   Ar
+#14638.504      0.0000   Ar
+ 14654.300      0.2424   Ar
+ 14697.400      0.0533   Ar
+ 14743.167      0.0747   Ar
+ 14789.421      0.0000   *Ar use Ar 14790.105
+ 14790.105      0.0217   Ar
+#~15012.500      0.0000   ? ***
+ 15034.750      0.0002   Ar FIT 2ND LAST
+ 15050.610      0.0001   Ar FIT LAST!
+ 15176.840      0.2637   Ar
+#~15274.200      0.0000   ? ***
+ 15306.062      0.3628   Ar
+ 15333.530      0.1353   Ar
+ 15353.500      0.0773   Ar
+ 15357.323      0.0000   *Ar close to stronger Ar 15353.500
+ 15406.849      0.0685   Ar
+#~15452.400      0.0000   ? ***
+#
+ 16000.000      0.0000   dummy line to improve last real line
+# ---------------------------------------------------------------------------- #

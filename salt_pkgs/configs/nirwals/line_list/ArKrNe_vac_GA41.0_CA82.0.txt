@@ -1,0 +1,80 @@
+#
+# Argon-Krypton-Neon (ArKrNe) Spectral Lines
+#
+# NOTES: The relative intensities retrieved from NIST Atomic Spectra Database
+#        were adjusted for the SALT calsys intensities OR TO GET GOOD FIT.
+#        The intesity of a line in chip gap, on edge of chip gap or edge of
+#        frame is set as zero. Lines with zero intensity will not be fitted.
+#
+# ---------------------------------------------------------------------------- #
+#   Lambda   Intensity   Comment
+# ---------------------------------------------------------------------------- #
+#
+ 12500.000      0.0000   dummy line to improve first real line
+#
+ 13149.041      0.0000   Ne too weak
+ 13181.015      0.4524   Kr
+ 13193.726      0.0000   Kr too weak
+#13214.280      0.0000   Kr too weak
+ 13217.600      0.3426   Ar
+ 13222.858      0.2542   *Ne close to stronger Ar 13217.600, don't show
+ 13231.725      0.3196   Ar
+ 13244.310      0.0467   Kr
+ 13276.270      0.7013   Ar
+ 13305.950      0.0240   Ar
+#13307.940      0.0000   Kr close to stronger Ar 13305.950
+ 13316.851      0.5763   Ar
+ 13333.830      0.0192   Ar
+ 13341.530      0.0413   Kr
+#13343.362      0.0000   Ne too weak
+ 13370.766      1.0000   Ar
+#13392.952      0.0000   Ne too weak
+ 13410.253      0.1114   Ar
+ 13503.100      0.0000   *Ar close to stronger Ar 13507.884
+ 13507.884      0.8464   Ar
+#13530.772      0.0000   Ne too weak
+ 13547.908      0.0194   Ar
+ 13577.329      0.0304   Ar
+#13588.803      0.0000   Ne too weak
+ 13603.052      0.0454   Ar
+ 13626.141      0.5242   Kr
+#13626.384      0.0000   Ar close to stronger Kr 13626.141
+ 13637.949      0.7768   Kr
+ 13662.120      0.0899   Kr
+ 13682.290      0.1225   Ar
+ 13714.770      0.0223   Kr
+ 13722.328      0.6402   Ar
+ 13742.491      0.1396   Ne
+#13829.495      0.0000   Ar blended
+ 13832.100      0.0000   Ar blended
+#13836.660      0.0000   Kr close to stronger Ar 13832.100
+#13870.096      0.0000   Ne too weak
+ 13886.650      0.0271   Kr
+ 13911.280      0.0000   *Ar blended and weak
+#13911.976      0.0000   Ne too weak
+ 13914.360      0.0165   Ar
+ 13927.850      0.1118   Kr
+ 13942.810      0.0116   Kr
+#13974.792      0.0000   Ne too weak
+ 13977.880      0.0140   Kr
+ 14016.752      0.0315   Ne
+#14019.732      0.0000   Ne too weak
+#14046.946      0.0000   Ne too weak
+ 14049.503      0.0000   Kr too weak
+#14077.958      0.0000   Ne too weak
+ 14097.493      0.1009   Ar
+ 14108.150      0.0185   Kr
+ 14160.490      0.0461   Kr
+ 14253.100      0.0144   Ar
+ 14260.800      0.0168   Ar
+ 14287.508      0.0103   Ne
+ 14304.743      0.0072   Ne
+#14346.081      0.0000   Ne too weak
+ 14351.400      0.1505   Kr
+ 14357.273      0.0062   *Ne close to stronger Kr 14351.400, don't show
+#14388.045      0.0000   Ne too weak
+ 14406.220      0.0614   Kr
+ 14430.736      0.3842   Kr
+#
+ 15000.000      0.0000   dummy line to improve last real line
+# ---------------------------------------------------------------------------- #

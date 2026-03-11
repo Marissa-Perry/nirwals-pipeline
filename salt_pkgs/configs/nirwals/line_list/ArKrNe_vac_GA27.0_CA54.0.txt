@@ -1,0 +1,56 @@
+#
+# Argon-Krypton-Neon (ArKrNe) Spectral Lines
+#
+# NOTES: The relative intensities retrieved from NIST Atomic Spectra Database
+#        were adjusted for the SALT calsys intensities OR TO GET GOOD FIT.
+#        The intesity of a line in chip gap, on edge of chip gap or edge of
+#        frame is set as zero. Lines with zero intensity will not be fitted.
+#
+# ---------------------------------------------------------------------------- #
+#   Lambda   Intensity   Comment
+# ---------------------------------------------------------------------------- #
+#
+  8000.000      0.0000   dummy line to improve first real line
+#
+# 8774.066      0.0000   Ne close to stronger Kr 8779.161
+  8779.161      0.6750   Kr
+# 8783.034      0.0000   Ne close to stronger Kr 8779.161
+  8856.298      0.0907   Ne
+  8868.191      0.0557   Ne
+  8921.950      0.0299   Ne
+  8931.145      0.8877   Kr
+# 8991.024      0.0000   Ne too weak
+  9125.471      1.0000   Ar
+  9151.183      0.0753   Ne
+  9197.161      0.0070   Ar
+  9204.284      0.0589   Ne
+# 9222.590      0.0000   Ne close to stronger Ar 9227.030
+  9227.030      0.3687   Ar
+# 9278.064      0.0000   Ne too weak
+  9294.081      0.0064   Ar
+  9303.405      0.0537   Ne
+  9316.529      0.0208   Ne
+  9329.066      0.0514   Ne
+# 9354.800      0.0000   Kr close to stronger Ar 9356.787
+  9356.787      0.0370   Ar
+# 9364.670      0.0000   Kr too weak
+  9375.880      0.0101   Ne
+  9427.966      0.0405   Ne
+  9461.806      0.0247   Ne
+  9489.285      0.0282   Ne
+  9536.779      0.0479   Ne
+  9550.024      0.0240   Ne
+  9660.435      0.7193   Ar
+  9668.071      0.1061   Ne
+  9706.880      0.0042   Kr
+  9754.435      0.3968   Kr
+  9787.186      0.1284   Ar
+  9858.940      0.0245   Kr
+ 10054.820      0.0030   Ar
+#10298.238      0.0000   Ne too weak
+ 10299.750      0.0025   Kr weak
+#
+ 10335.550      0.0000   Ar too weak
+#
+ 11000.000      0.0000   dummy line to improve last real line
+# ---------------------------------------------------------------------------- #
