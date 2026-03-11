@@ -33,7 +33,9 @@ def load_json(path):
 #             print(f"Error processing {basename}: {e}")
 
 
-def run_workflow(workflow_file, obs_date, param_dir, config_dir, work_dir, with_stdout=True, only_stdout=False,):
+def run_workflow(workflow_file, obs_date, param_dir, config_dir, work_dir, 
+                 saltdata_dir='', with_stdout=True, only_stdout=False):
+                # need saltdata_dir for nirwalsreduce to read, but do not have salt archive on local machine
     
     # setting dirs as absolute paths
     param_dir = os.path.abspath(param_dir)
@@ -71,7 +73,7 @@ def run_workflow(workflow_file, obs_date, param_dir, config_dir, work_dir, with_
             # retrieve sub-workflow file
             sub_workflow = os.path.join(os.path.dirname(workflow_file), task["name"])
             # recurse into sub-workflow
-            run_workflow(sub_workflow, obs_date, param_dir, config_dir, work_dir, with_stdout, only_stdout,)
+            run_workflow(sub_workflow, obs_date, param_dir, config_dir, work_dir, saltdata_dir, with_stdout, only_stdout,)
 
         # if task is a module, execute
         elif task["type"] == "module":
@@ -114,8 +116,9 @@ def run_workflow(workflow_file, obs_date, param_dir, config_dir, work_dir, with_
                 "param_dir": param_dir,
                 "config_dir": config_dir,
                 "work_dir": work_dir,
+                "saltdata_dir": saltdata_dir,
                 "with_stdout": with_stdout,
-                "only_stdout": only_stdout,
+                "only_stdout": only_stdout
             }
 
             # terminal output for debugging
@@ -162,8 +165,6 @@ if __name__ == "__main__":
     config_dir = sys.argv[4]
     work_dir = sys.argv[5]
 
-    run_workflow(workflow_file=workflow_file, obs_date=obs_date, param_dir=param_dir, 
-                 config_dir=config_dir, work_dir=work_dir,
-                 with_stdout=True,only_stdout=False,)
+    run_workflow(workflow_file=workflow_file, obs_date=obs_date, param_dir=param_dir, config_dir=config_dir, work_dir=work_dir)
 
 
