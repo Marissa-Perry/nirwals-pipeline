@@ -15,9 +15,9 @@ Science data reduction pipeline for reducing NIRWALS data from SALT.
 ## Usage
 ```bash
 python -m nirwals_pipeline.wrappers.run_nirwals_workflow \
-    workflow.json \
+    nirwals_pipeline/salt_pkgs/workflows/nirwals/workflow_science_nirwals.json \
     YYYYMMDD \
-    params/ \
-    configs/ \
-    work_dir/ 
+    nirwals_pipeline/salt_pkgs/params \             
+    nirwals_pipeline/salt_pkgs/configs \           
+    nirwals_pipeline/YYYYMMDD/nirwals/NIRWALS_work 
 ```
