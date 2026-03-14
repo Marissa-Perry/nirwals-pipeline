@@ -19,5 +19,5 @@ python -m nirwals_pipeline.wrappers.run_nirwals_workflow \
     YYYYMMDD \
     nirwals_pipeline/salt_pkgs/params \             
     nirwals_pipeline/salt_pkgs/configs \           
-    nirwals_pipeline/YYYYMMDD/nirwals/NIRWALS_work 
+    nirwals_pipeline/YYYYMMDD 
 ```
