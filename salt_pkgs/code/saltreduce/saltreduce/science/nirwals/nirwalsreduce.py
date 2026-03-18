@@ -754,6 +754,12 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     log.message(msg, with_header=False)
     # Set 'centre' fibre 1D flux array in work dictionary
     work['f'] = fibres[work['centre_id']].copy()
+
+    ##### DEBUGGING ####### 
+    # flip flux arr
+    work['f'] = work['f'][::-1]
+    #######################
+
     # Smooth 'centre' fibre 1D flux array (if needed)
     work['f'] = smooth_flux_array(work['f'], **work['smooth']['arc'])
     ####>
@@ -768,6 +774,46 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
 
     # Initialise wavelength fit
     wf, w = initialise_wavelength_fit(hdu, traces, ws, work, log)
+
+
+    ########## DEBUG PLOT 03/14/2026 ##############
+    print('\ngenerating arc vs model diagnostic plot...\n\n')
+    import matplotlib.pyplot as plt
+    from scipy.signal import correlate
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+    # re-sample model (artificial spectrum from line list)
+    # lines are narrower than observed arc resolution
+    model_flux = np.interp(w, work['line_list']['aswarr'], work['line_list']['asfarr'])
+
+    # normalize spectra
+    obs = work['f'] / np.max(work['f'])
+    model = model_flux / np.max(model_flux)
+
+    ax.plot(w, obs, color='black', label='observed arc (wavelength from grating model)')
+    ax.plot(w, model, color='red', linewidth=0.8, label='model')
+
+    # lines from line list
+    ax.vlines(work['line_list']['swarr'],
+              ymin=min(work['f']),
+              ymax=max(work['f']),
+              color='grey',
+              linestyles='--',
+              linewidth=0.5,
+              label='line list')
+
+    ax.set_xlim(min(w),max(w))
+    ax.set_ylim(-0.1,1.5)
+    ax.set_xlabel('Wavelength (A)', labelpad=15)
+    ax.set_ylabel('Normalized Flux', labelpad=15)
+    ax.set_title(f'Arc Lamp: {lamp}', pad=15)
+    ax.legend(loc='upper right')
+    plot_path = os.path.join(work['output']['dir'], f"{work['file']}_arc_model_debug.png")  
+    plt.savefig(plot_path, dpi=120)
+    plt.close()
+###############################################
+
     # Check wavelength fit
     if not wf:
         # Add message to log
@@ -1265,6 +1311,12 @@ def fit_wavelength_coordinates(traces, fibres, ws, wf, work, log):
             fibre_id = '{0:03d}'.format(i + 1)
             # Set 1D fibre flux array
             f = fibres[fibre_id].copy()
+
+            ##### DEBUGGING ##### 
+            # flip flux arr here as well...
+            f = f[::-1]
+            #####################
+
             # Smooth flux array... if needed
             f = smooth_flux_array(f, **work['smooth']['arc'])
 

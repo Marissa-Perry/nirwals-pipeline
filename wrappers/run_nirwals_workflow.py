@@ -14,7 +14,7 @@ def load_json(path):
 def fix_primary_header_keys(work_dir):
     '''
     nirwalsreduce.py expects header "AR-ANGLE" that does not exist in our raw data files. 
-    Manually replace with header "CAMANG", which provides the same information ? 
+    Manually replace with header "CAMANG", which provides the same information
     '''
 
     product_dir = os.path.join(work_dir, 'nirwals', 'product')

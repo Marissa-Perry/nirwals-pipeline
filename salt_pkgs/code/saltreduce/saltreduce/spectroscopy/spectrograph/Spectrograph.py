@@ -22,7 +22,8 @@ class Equations:
         """Return tan of x where x is in degrees"""
         if isinstance(x, np.ndarray):
             return np.tan(math.pi * x / 180.0)
-        return math.cos(math.radians(x))
+        # return math.cos(math.radians(x))  #### must be a typo ? modified on 03/15/2026 to be tan instead of cos
+        return math.tan(math.radians(x))
 
     def n_index(self):
         return 1.
