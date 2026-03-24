@@ -755,10 +755,10 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     # Set 'centre' fibre 1D flux array in work dictionary
     work['f'] = fibres[work['centre_id']].copy()
 
-    ##### DEBUGGING ####### 
-    # flip flux arr
+    ###### DEBUGGING #######
+    # flip flux array to correct for detector geometry
     work['f'] = work['f'][::-1]
-    #######################
+    ########################
 
     # Smooth 'centre' fibre 1D flux array (if needed)
     work['f'] = smooth_flux_array(work['f'], **work['smooth']['arc'])
@@ -776,10 +776,9 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     wf, w = initialise_wavelength_fit(hdu, traces, ws, work, log)
 
 
-    ########## DEBUG PLOT 03/14/2026 ##############
+    ########## DEBUG PLOT ##############
     print('\ngenerating arc vs model diagnostic plot...\n\n')
     import matplotlib.pyplot as plt
-    from scipy.signal import correlate
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 6))
 
@@ -1165,6 +1164,14 @@ def initialise_wavelength_fit(hdu, traces, ws, work, log):
         # Get model wavelength array for j (centre row)
         w_mod = 1e7 * spectrograph.get_wavelength(work['p'], j=j)
 
+        ##### DEBUGGING ########
+        # notice that model wavelength increases (from blue to red), unlike for raw fibers due to detector geometry....
+        # this is why the raw fiber flux is flipped throughout the reduction steps
+        print()
+        print(f'grating model: w_mod[0]={w_mod[0]:.3f}, w_mod[-1]={w_mod[-1]:.3f}')
+        print()
+        ########################
+
         # Check wavelength key (vac, air)
         if work['wavelength_key'] == 'vac':
             # Add message to log
@@ -1312,10 +1319,10 @@ def fit_wavelength_coordinates(traces, fibres, ws, wf, work, log):
             # Set 1D fibre flux array
             f = fibres[fibre_id].copy()
 
-            ##### DEBUGGING ##### 
-            # flip flux arr here as well...
+            ####### DEBUGGING #########
+            # flip flux array to correct for detector geometry
             f = f[::-1]
-            #####################
+            ###########################
 
             # Smooth flux array... if needed
             f = smooth_flux_array(f, **work['smooth']['arc'])
@@ -1456,6 +1463,12 @@ def rectify(traces, fibres, ws, wf, work):
             # Set offset for fibre
             fibre_offset = ws['fibre_offsets'][fibre_id]
 
+            ###### DEBUGGING ########
+            # ensure NaN values don't propagate when fibres are stacked --> replace with zero
+            if np.isnan(fibre_offset):
+                fibre_offset = 0.
+            #########################
+
         # Set zero point in wavelength coordinates (zero points) fit
         twf.coef[0] = zf(j) + zps_shift + fibre_offset
         # Update wavelength fit coefficients
@@ -1464,6 +1477,12 @@ def rectify(traces, fibres, ws, wf, work):
         w = np.around(twf.value(work['p']), decimals=DEC)
         # Interpolate 1D fibre flux array for evenly spaced wavelength array
         f = np.interp(work['we'], w, f) # , left=0., right=0.)
+
+        ######## DEBUGGING ##########
+        # flip flux array to correct for detector geometry
+        f = f[::-1] 
+        #############################
+
         # Update 1D fibre flux array in extracted fibres dictionary
         fibres[fibre_id] = f
 
@@ -1511,6 +1530,12 @@ def set_fibre_offsets(traces, fibres, ws, work):
             i = int(fibre_id) - 1
             # Smooth flux
             f = smooth_flux_array(fe[w_filter], **work['smooth']['arc'])
+
+            ######## DEBUGGING ##########
+            # flip flux array to correct for detector geometry
+            f = f[::-1]
+            #############################
+
             # Set height for finding peak(s): 80% flux in range
             find_peaks_dict['height'] = 0.8 * f.max()
             # Find all peaks / features: scipy.signal.find_peaks
