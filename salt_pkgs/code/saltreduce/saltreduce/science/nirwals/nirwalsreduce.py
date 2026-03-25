@@ -757,7 +757,7 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
 
     ###### DEBUGGING #######
     # flip flux array to correct for detector geometry
-    work['f'] = work['f'][::-1]
+    work['f'] = orient_fibre_flux(work['f'])
     ########################
 
     # Smooth 'centre' fibre 1D flux array (if needed)
@@ -774,44 +774,6 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
 
     # Initialise wavelength fit
     wf, w = initialise_wavelength_fit(hdu, traces, ws, work, log)
-
-
-    ########## DEBUG PLOT ##############
-    print('\ngenerating arc vs model diagnostic plot...\n\n')
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
-
-    # re-sample model (artificial spectrum from line list)
-    # lines are narrower than observed arc resolution
-    model_flux = np.interp(w, work['line_list']['aswarr'], work['line_list']['asfarr'])
-
-    # normalize spectra
-    obs = work['f'] / np.max(work['f'])
-    model = model_flux / np.max(model_flux)
-
-    ax.plot(w, obs, color='black', label='observed arc (wavelength from grating model)')
-    ax.plot(w, model, color='red', linewidth=0.8, label='model')
-
-    # lines from line list
-    ax.vlines(work['line_list']['swarr'],
-              ymin=min(work['f']),
-              ymax=max(work['f']),
-              color='grey',
-              linestyles='--',
-              linewidth=0.5,
-              label='line list')
-
-    ax.set_xlim(min(w),max(w))
-    ax.set_ylim(-0.1,1.5)
-    ax.set_xlabel('Wavelength (A)', labelpad=15)
-    ax.set_ylabel('Normalized Flux', labelpad=15)
-    ax.set_title(f'Arc Lamp: {lamp}', pad=15)
-    ax.legend(loc='upper right')
-    plot_path = os.path.join(work['output']['dir'], f"{work['file']}_arc_model_debug.png")  
-    plt.savefig(plot_path, dpi=120)
-    plt.close()
-###############################################
 
     # Check wavelength fit
     if not wf:
@@ -899,6 +861,85 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
 
     # Rectify extracted fibres
     rectify_fibres(traces, fibres, ws, wf, work, log)
+
+    ########## DEBUGGING ##############
+        # ------------------------------------------------------------ #
+    # DEBUG: check all matched-line residuals for sample fibres
+    # ------------------------------------------------------------ #
+
+    print()
+    print("... checking all matched-line residuals after rectification ...")
+
+    sample_fibres = ['001', '050', '100', '150', '200', '248']
+    diff = int(0.5 * len(KERN) + 1)
+
+    for fibre_id in sample_fibres:
+
+        if fibre_id not in fibres:
+            continue
+
+        f = fibres[fibre_id]
+
+        print()
+        print(f"fibre {fibre_id}")
+
+        fibre_residuals = []
+
+        for w_ref in ws['wm']:
+
+            # local search window around each matched line
+            mask = (work['we'] > w_ref - 5.0) & (work['we'] < w_ref + 5.0)
+            wloc = work['we'][mask]
+            floc = f[mask]
+
+            # skip if too few points or empty data
+            if wloc.size < 5 or np.all(np.isnan(floc)) or np.all(floc == 0):
+                print(f"  w_ref={w_ref:.3f}: no usable data")
+                continue
+
+            # smooth local segment
+            floc_s = smooth_flux_array(floc, **work['smooth']['arc'])
+
+            # guard against pathological windows
+            if not np.isfinite(np.nanmax(floc_s)) or np.nanmax(floc_s) <= 0:
+                print(f"  w_ref={w_ref:.3f}: invalid local flux")
+                continue
+
+            # find peaks in the local window
+            pks, _ = find_peaks(floc_s, height=0.5 * np.nanmax(floc_s))
+
+            if len(pks) == 0:
+                print(f"  w_ref={w_ref:.3f}: no peak found")
+                continue
+
+            # choose detected peak closest to reference wavelength
+            cand = wloc[pks]
+            idx = np.argmin(np.abs(cand - w_ref))
+            guess = cand[idx]
+
+            # centroid around chosen guess
+            peak = centroid(wloc, floc_s, kern=KERN, guess=guess, diff=diff)
+            delta = peak - w_ref
+            fibre_residuals.append(delta)
+
+            print(f"  w_ref={w_ref:.3f}, peak={peak:.3f}, delta={delta:.3f}")
+
+        if len(fibre_residuals) > 0:
+            fibre_residuals = np.array(fibre_residuals, dtype=float)
+            print(
+                "  summary: "
+                f"median={np.median(fibre_residuals):.3f}, "
+                f"std={np.std(fibre_residuals):.3f}, "
+                f"min={np.min(fibre_residuals):.3f}, "
+                f"max={np.max(fibre_residuals):.3f}"
+            )
+        else:
+            print("  summary: no measurable lines")
+
+    print()
+    ###################################
+
+
     # Stack fibre flux image: fibre type 'all'
     fibre_image = stack_fibre_image(traces, fibres)
     # Stack good pixels count image: fibre type 'all'
@@ -1321,7 +1362,7 @@ def fit_wavelength_coordinates(traces, fibres, ws, wf, work, log):
 
             ####### DEBUGGING #########
             # flip flux array to correct for detector geometry
-            f = f[::-1]
+            f = orient_fibre_flux(f)
             ###########################
 
             # Smooth flux array... if needed
@@ -1463,12 +1504,6 @@ def rectify(traces, fibres, ws, wf, work):
             # Set offset for fibre
             fibre_offset = ws['fibre_offsets'][fibre_id]
 
-            ###### DEBUGGING ########
-            # ensure NaN values don't propagate when fibres are stacked --> replace with zero
-            if np.isnan(fibre_offset):
-                fibre_offset = 0.
-            #########################
-
         # Set zero point in wavelength coordinates (zero points) fit
         twf.coef[0] = zf(j) + zps_shift + fibre_offset
         # Update wavelength fit coefficients
@@ -1476,7 +1511,13 @@ def rectify(traces, fibres, ws, wf, work):
         # Set wavelength array for fit
         w = np.around(twf.value(work['p']), decimals=DEC)
         # Interpolate 1D fibre flux array for evenly spaced wavelength array
+
+        ######## DEBUGGING ###########
+        f = orient_fibre_flux(f)
         f = np.interp(work['we'], w, f) # , left=0., right=0.)
+        ##############################
+
+        # f = np.interp(work['we'], w, f) # , left=0., right=0.)   # DEBUGGING !!!!
         # Update 1D fibre flux array in extracted fibres dictionary
         fibres[fibre_id] = f
 
@@ -2251,6 +2292,13 @@ def smooth_flux_array(farr, **par):
         farr = savgol_filter(farr, **par)
 
     return farr
+
+# ---------------------------------------------------------------------------- #
+def orient_fibre_flux(f):
+# DEBUGGING
+# Due to the detector geometry, the extracted fibre wavelength increases right-to-left (red-to-blue)
+# ---------------------------------------------------------------------------- #
+    return f[::-1]
 
 # ---------------------------------------------------------------------------- #
 def centroid(parr, farr, guess=None, diff=None, kern=KERN, mode='same'):
