@@ -1477,12 +1477,6 @@ def rectify(traces, fibres, ws, wf, work):
         w = np.around(twf.value(work['p']), decimals=DEC)
         # Interpolate 1D fibre flux array for evenly spaced wavelength array
         f = np.interp(work['we'], w, f) # , left=0., right=0.)
-
-        ######## DEBUGGING ##########
-        # flip flux array to correct for detector geometry
-        f = f[::-1] 
-        #############################
-
         # Update 1D fibre flux array in extracted fibres dictionary
         fibres[fibre_id] = f
 
@@ -1530,12 +1524,6 @@ def set_fibre_offsets(traces, fibres, ws, work):
             i = int(fibre_id) - 1
             # Smooth flux
             f = smooth_flux_array(fe[w_filter], **work['smooth']['arc'])
-
-            ######## DEBUGGING ##########
-            # flip flux array to correct for detector geometry
-            f = f[::-1]
-            #############################
-
             # Set height for finding peak(s): 80% flux in range
             find_peaks_dict['height'] = 0.8 * f.max()
             # Find all peaks / features: scipy.signal.find_peaks
