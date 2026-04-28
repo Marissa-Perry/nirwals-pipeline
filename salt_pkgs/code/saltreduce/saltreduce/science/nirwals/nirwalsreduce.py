@@ -1657,6 +1657,11 @@ def fit_and_subtract_continuum_for_image(key, image, work, log):
 
     # Set mask in work dictionary
     work['image_mask'] = mask
+
+    ####### DEBUGGING ########
+    image_mask_diagnostic_plot(work, xarr, mask)
+    ##########################
+
 ####>
     # plt.figure(1, figsize=(16, 9), tight_layout=True)
     # ext = (xarr.min(), xarr.max(), 0, mask.shape[0])
@@ -1699,6 +1704,24 @@ def fit_spectral_channels(image, work, log):
     # Set 1D fitting dictionary
     fit = work['spectral_channels']['fit']
 
+    ####### DEBUG ######
+    print('\nsky-fit image generation...')
+    print('\n fit params:')
+    print(fit)
+    print()
+
+
+    wav_grid = work['we']
+    wmin = 10250  # straddling a sky-line around 10300 A
+    wmax = 10350  # ''
+
+    # 10 evenly spaced wavelengths
+    sample_wavs = np.linspace(wmin, wmax, 10)
+
+    # wavelengths to column indices
+    diagnostic_cols = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs])
+    #############
+
     # Loop for columns...
     for j in range(work['cols']):
 
@@ -1723,10 +1746,89 @@ def fit_spectral_channels(image, work, log):
         # Set spectral fit in spectral fit image array
         sf_image[:, j][cm] = sf(work['s'])[cm]
 
+        ####### DEBUG ######
+        if j in diagnostic_cols:
+            sky_line_fit_image_diagnostic_plot(
+                work,
+                input_flux=farr,
+                fit_flux=sf(work['s']),
+                mask=cm,
+                col=j
+            )
+        ####### DEBUG #######
+
     # Set NaN to 1
     sf_image[np.isnan(sf_image)] = 1.
 
     return sf_image
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def image_mask_diagnostic_plot(work, xarr, mask):
+# ---------------------------------------------------------------------------- #
+    plt.figure(1, figsize=(16, 9), tight_layout=True)
+    ext = (xarr.min(), xarr.max(), 0, mask.shape[0])
+    plt.imshow(mask, extent=ext, origin='lower', aspect='auto', cmap='plasma')
+
+    plt.xlabel('wavelength [A]', fontsize=12, labelpad=15)
+    plt.ylabel('fiber #', fontsize=12, labelpad=15)
+    
+    
+    # Set png file
+    png_file = '{0}_image_mask.png'.format(work['file'])
+    # Add output directory path to png file
+    png_file = os.path.join(work['output']['dir'], png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+    
+    print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
+    # -----------------------------------------------------------
+
+    # # Clear current figure
+    # plt.clf()
+    # # Close current figure window (if any)
+    # plt.close()
+
+    return
+
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def sky_line_fit_image_diagnostic_plot(work, input_flux, fit_flux, mask, col):
+# ---------------------------------------------------------------------------- #
+
+    fibre_index = work['s']
+
+    plt.figure(figsize=(8, 5))
+
+    plt.plot(input_flux[mask], fibre_index[mask], '.', label='input')
+    plt.plot(fit_flux[mask], fibre_index[mask], '-', label='sky fit')
+
+    wav = work['we'][col] if 'we' in work else col
+
+    plt.title(f'column {col}, wavelength {wav:.2f} A')
+    plt.xlabel('flux', fontsize=12, labelpad=15)
+    plt.ylabel('fiber #', fontsize=12, labelpad=15)
+    plt.legend(fontsize=12)
+
+    # Set png file
+    png_file = '{0}_sky_fit_column_{1:04d}.png'.format(work['file'], col)
+    # Add output directory path to png file
+    png_file = os.path.join(work['output']['dir'], png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+
+    print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
+    # -----------------------------------------------------------
+
+    # # Clear current figure
+    # plt.clf()
+    # # Close current figure window (if any)
+    # plt.close()
+
+    return
+
+
 
 # ---------------------------------------------------------------------------- #
 def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
@@ -1827,11 +1929,11 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
         return None, None
 
     # Initialise object to sky spectral channels fit ratio image
-    rat_sf_image = np.ones(sci_sf_image.shape, dtype=np.float32)
+    rat_sf_image = np.ones(sci_sf_image.shape, dtype=np.float32)  # all values initialized to 1
     # Set non-zero mask from sky spectral channels fit image
     nz = sky_sf_image != 0.
     # Set object to sky spectral channels fit ratio
-    rat_sf_image[nz] = sci_sf_image[nz] / sky_sf_image[nz]
+    rat_sf_image[nz] = sci_sf_image[nz] / sky_sf_image[nz]  # wavelength-dependent scaling of sky emission in obj and sky frames
 
     # Initialise gpm image array (copy of sky spectral channels fit)
     gpm_image = sky_sf_image.copy()
@@ -1850,47 +1952,82 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
         # Set threshold value
         thresh = gpm_thresh['value']
 
+    # masking out interline regions (currently, thresh=0.1)
     # Set zeros
     gpm_image[sky_sf_image <= thresh] = 0.
     # Set ones
     gpm_image[sky_sf_image > thresh] = 1.
 
     # Clean object continuum subtracted image
-    sci_cs_2d = gpm_image * sci_cs_image
+    sci_cs_2d = gpm_image * sci_cs_image        # interline regions set to 0, in obj cs image 
     # Clean sky continuum subtracted image
-    sky_cs_2d = gpm_image * sky_cs_image
+    sky_cs_2d = gpm_image * sky_cs_image        # interline regions set to 0, in sky cs image
     # Collapse object continuum subtracted image
-    sci_cs_1d = np.sum(sci_cs_2d, axis=1)
+    sci_cs_1d = np.sum(sci_cs_2d, axis=1)       # summing up spectral axis across fibers: (n columns, 1)
     # Some numpy voodoo... set n rows, 1 column
-    sci_cs_1d = np.array([sci_cs_1d]).transpose()
+    sci_cs_1d = np.array([sci_cs_1d]).transpose()  # transpose: (n rows, 1)
     # Collapse sky continuum subtracted image
-    sky_cs_1d = np.sum(sky_cs_2d, axis=1)
+    sky_cs_1d = np.sum(sky_cs_2d, axis=1)        # ''
     # Some numpy voodoo... set n rows, 1 column
-    sky_cs_1d = np.array([sky_cs_1d]).transpose()
-
+    sky_cs_1d = np.array([sky_cs_1d]).transpose()  # ''
     # Initialise object to sky continuum subtracted ratio array (1D)
     rat_cs_1d = np.ones(sci_cs_1d.shape, dtype=np.float32)
     # Set non-zero mask from sky continuum subtracted array
     nz = sky_cs_1d != 0.
     # Set object to sky continuum subtracted ratio array (1D)
-    rat_cs_1d[nz] = sci_cs_1d[nz] / sky_cs_1d[nz]
+    rat_cs_1d[nz] = sci_cs_1d[nz] / sky_cs_1d[nz]        
     # Normalise object to sky continuum subtracted ratio array (1D)
-    rat_cs_1d /= rat_cs_1d.mean()
+    # rat_cs_1d /= rat_cs_1d.mean()     # renaming variables for plotting !!!!
+    rat_cs_1d_norm = rat_cs_1d / rat_cs_1d.mean()
     # Repeat 1D object to sky ratio to same column dimension as 2D images
-    rat_cs_2d = np.repeat(rat_cs_1d, rat_sf_image.shape[1], axis=1)
+    # rat_cs_2d = np.repeat(rat_cs_1d, rat_sf_image.shape[1], axis=1)   # renaming variables for plotting !!!
+    rat_cs_2d_norm = np.repeat(rat_cs_1d_norm, rat_sf_image.shape[1], axis=1)
+
+    # plotting summed sky lines vs. fiber #
+    sky_line_sum_diagnostic_plot(work,
+                                 sky_spectral_sum_arr=sky_cs_1d, 
+                                 object_spectral_sum_arr=sci_cs_1d,
+                                 ratio_arr=rat_cs_1d,
+                                 norm_ratio_arr=rat_cs_1d_norm
+                                 )
+    
     # Combine normalised wavelength and position scalings
-    rat_sf_image *= rat_cs_2d
+    # rat_sf_image *= rat_cs_2d_norm                   # renaming variables for plotting !!!!        
+    scaling_image = rat_sf_image * rat_cs_2d_norm      # combining wavelength-dependent and fiber-dependent ratios
     # Clean interline regions
-    rat_sf_image *= gpm_image
+    # rat_sf_image *= gpm_image              # renaming variables for plotting !!!!        
+    scaling_image_masked = scaling_image * gpm_image         # interline regions set to 0
     # Set interline regions to unity
-    rat_sf_image[rat_sf_image < 1e-2] = 1.
+    # rat_sf_image[rat_sf_image < 1e-2] = 1.                   # using renamed variable for plotting !!!!       
+    scaling_image_masked[scaling_image_masked < 1e-2] = 1.      # interline regions (value of zero) do not contribute to later scaling (factor=1)
 
     # Scale sky continuum subtracted image
-    sky_scaled = sky_cs_image * rat_sf_image
+    # sky_scaled = sky_cs_image * rat_sf_image            # using renamed variable for plotting !!!!       
+    sky_scaled = sky_cs_image * scaling_image_masked      # scaling the sky lines in the sky frame to the sky lines in the object frame
+
+    sky_line_scaling_diagnostic_plot(work, 
+                                     wav_dep_scaling_ratio_2d=rat_sf_image * gpm_image,
+                                     fiber_dep_scaling_ratio_2d=rat_cs_2d_norm,
+                                     sky_combined_scaling_factor_2d=scaling_image * gpm_image#,
+                                    #  sky_combined_scaling_factor_masked_2d=scaling_image_masked
+                                     )
+
     # Subtract scaled image from object continuum subtracted image
     sci_image = sci_cs_image - sky_scaled
     # Add continuum back in
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image)
+
+    skyline_residuals_plot(work,
+                           flattened_obj_cs_2d=sci_image,
+                           gpm=gpm_image
+                           )
+
+    sky_line_flattening_diagnostic_plot(work, 
+                                        unscaled_sky_cs_2d = sky_cs_image, 
+                                        unflattened_obj_cs_2d = sci_cs_image,
+                                        scaled_sky_cs_2d = sky_scaled, 
+                                        flattened_obj_cs_2d = sci_image
+                                        )
 
     # Add sky subtracted header key
     value = time.asctime(time.localtime())
@@ -1898,6 +2035,231 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     hdu['Primary'].header['SKYSUB'] = (value, comment)
 
     return sci_image, sci_image_with_cont
+
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def skyline_residuals_plot(work,
+                           flattened_obj_cs_2d,
+                           gpm
+                           ):
+# ---------------------------------------------------------------------------- #
+
+    # keep only skyline regions
+    masked = flattened_obj_cs_2d * gpm
+
+    n_fibres = masked.shape[0]
+
+    mean_resid = np.zeros(n_fibres, dtype=float)
+    median_resid = np.zeros(n_fibres, dtype=float)
+
+    for i in range(n_fibres):
+        # sky sub intensity for i-th fiber
+        #       for all skyline spectral regions 
+        vals = masked[i, gpm[i, :] > 0]
+
+        mean_resid[i] = np.mean(vals)
+        median_resid[i] = np.median(vals)
+
+    fibre_idx = np.arange(n_fibres)
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(fibre_idx, mean_resid, color='black', alpha=0.7, label='mean')
+    plt.plot(fibre_idx, median_resid, color='red', alpha=0.7, label='median')
+    plt.axhline(0, color='grey', linestyle='--', alpha=0.4)
+
+    plt.ylim(-1.8,1.8)
+
+    plt.xlabel('fiber #', fontsize=12, labelpad=15)
+    plt.ylabel('residual sky-line intensity', fontsize=12, labelpad=15)
+    plt.legend(fontsize=12)
+
+    # Set png file
+    png_file = '{0}_residual_sky_vs_fiber_threshold_0.5.png'.format(work['file'])
+    # Add output directory path to png file
+    png_file = os.path.join(work['output']['dir'], png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+
+    print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
+    # -----------------------------------------------------------
+
+    # # Clear current figure
+    # plt.clf()
+    # # Close current figure window (if any)
+    # plt.close()
+
+    return
+
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def sky_line_sum_diagnostic_plot(work, 
+                                 sky_spectral_sum_arr,
+                                 object_spectral_sum_arr,
+                                 ratio_arr,
+                                 norm_ratio_arr
+                                 ):
+# ---------------------------------------------------------------------------- #
+
+    # retrive spectra
+    unflattened_obj_cs_2dspec = sky_spectral_sum_arr[:, 0]  # flatten to have an array of values, one for each fiber
+    scaled_sky_cs_2d_spec = object_spectral_sum_arr[:, 0]
+    unscaled_sky_cs_2d_spec = ratio_arr[:, 0]
+    flattened_obj_cs_2d_spec = norm_ratio_arr[:, 0]
+
+    n_fibres = sky_spectral_sum_arr.shape[0]
+    fibre_idx = np.arange(n_fibres)
+
+    plt.figure(figsize=(8,5))
+    plt.plot(fibre_idx, sky_spectral_sum_arr, label='sky frame')
+    plt.plot(fibre_idx, object_spectral_sum_arr, label='obj frame')
+
+    plt.xlabel('fiber #', fontsize=12, labelpad=15)
+    plt.ylabel('summed sky lines', fontsize=12, labelpad=15)
+    plt.legend(fontsize=12)
+
+    # Set png file
+    png_file = '{0}_summed_sky_lines_vs_fiber.png'.format(work['file'])
+    # Add output directory path to png file
+    png_file = os.path.join(work['output']['dir'], png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+
+    # --------- figure of scale factor for each fiber ----------
+    plt.figure(figsize=(8,5))
+
+    # plt.title(title, fontsize=11)
+    plt.plot(fibre_idx, ratio_arr, color='grey', label='raw')
+    plt.plot(fibre_idx, norm_ratio_arr, color='blue', label='normalized')
+
+    plt.xlabel('fiber #', fontsize=12, labelpad=15)
+    plt.ylabel('obj-sky ratio', fontsize=12, labelpad=15)
+    plt.legend(fontsize=12)
+
+    # Set png file
+    png_file = '{0}_fiber_scaling_ratios.png'.format(work['file'])
+    # Add output directory path to png file
+    png_file = os.path.join(work['output']['dir'], png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+
+    print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
+    # -----------------------------------------------------------
+
+    # # Clear current figure
+    # plt.clf()
+    # # Close current figure window (if any)
+    # plt.close()
+
+    return
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def sky_line_flattening_diagnostic_plot(work, 
+                                        unscaled_sky_cs_2d, 
+                                        unflattened_obj_cs_2d,
+                                        scaled_sky_cs_2d, 
+                                        flattened_obj_cs_2d
+                                        ):
+# ---------------------------------------------------------------------------- #
+    '''
+    want to plot raw, extracted spectrum for a given fiber along with its continuum fit (one color)
+    and the sky-line-flattened spectrum for the same fiber
+    '''
+    # after rectification, all fibers share the same wavelength grid
+    wav_grid = work['we']
+    offset = 10   #[A]
+
+    # choosing chunks fibers that will finely sample the bottom, middle, and top of the psuedo-slit
+    # without plotting all of them
+    # note that these numbers correspond to fiber position along psuedo slit, not the fiber IDs on the IFU
+    diagnostic_fibers = [10,15,100,105,205,210]  
+    for fiber_num in diagnostic_fibers:
+
+        # retrive spectra
+        unflattened_obj_cs_2dspec = unflattened_obj_cs_2d[fiber_num,:]
+        scaled_sky_cs_2d_spec = scaled_sky_cs_2d[fiber_num,:]
+        unscaled_sky_cs_2d_spec = unscaled_sky_cs_2d[fiber_num,:]
+        flattened_obj_cs_2d_spec = flattened_obj_cs_2d[fiber_num,:]
+
+        # plot the spectra
+        plt.figure(figsize=(8,5))
+
+        plt.title(f'continuum-subtracted frames, fiber idx {fiber_num}', fontsize=11)
+        plt.plot(wav_grid, unflattened_obj_cs_2dspec, color='black', alpha=0.9, label='obj')
+        plt.plot(wav_grid, flattened_obj_cs_2d_spec, color='red', alpha=0.9, zorder=5, linestyle='dotted', label='obj - scaled sky')
+        plt.plot(wav_grid, scaled_sky_cs_2d_spec, color='blue', alpha=0.3, label='scaled sky')
+        plt.plot(wav_grid - offset, unscaled_sky_cs_2d_spec, color='orange', alpha=0.5, label='unscaled sky')
+
+        plt.xlabel('Wavelength [A]', fontsize=12, labelpad=15)
+        plt.ylabel('residual intensity', fontsize=12, labelpad=15)
+        plt.legend(fontsize=12)
+
+        # Set png file
+        png_file = '{0}_sky_flattened_spectrum_of_fiber_{1}.png'.format(work['file'],fiber_num)
+        # Add output directory path to png file
+        png_file = os.path.join(work['output']['dir'], png_file)
+        # Save plot as png
+        plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+
+        print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
+
+    return
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def sky_line_scaling_diagnostic_plot(work, 
+                                     wav_dep_scaling_ratio_2d,
+                                     fiber_dep_scaling_ratio_2d,
+                                     sky_combined_scaling_factor_2d#,
+                                    #  sky_combined_scaling_factor_masked_2d
+                                     ):
+# ---------------------------------------------------------------------------- #
+    '''
+    ...
+    '''
+    # after rectification, all fibers share the same wavelength grid
+    wav_grid = work['we']
+    offset = 10   #[A]
+
+    # choosing chunks fibers that will finely sample the bottom, middle, and top of the psuedo-slit
+    # without plotting all of them
+    # note that these numbers correspond to fiber position along psuedo slit, not the fiber IDs on the IFU
+    diagnostic_fibers = [10,15,100,105,205,210] 
+    for fiber_num in diagnostic_fibers:
+
+        # retrive spectra
+        wav_dep_scaling_ratio_2d_spec = wav_dep_scaling_ratio_2d[fiber_num,:]
+        fiber_dep_scaling_ratio_2d_spec = fiber_dep_scaling_ratio_2d[fiber_num,:]
+        sky_combined_scaling_factor_2d_spec = sky_combined_scaling_factor_2d[fiber_num,:]
+        # sky_combined_scaling_factor_masked_2d_spec = sky_combined_scaling_factor_masked_2d[fiber_num,:]
+
+        # plot the spectra
+        plt.figure(figsize=(8,5))
+
+        plt.title(f'sky-line scaling, fiber idx {fiber_num}', fontsize=11)  
+        plt.plot(wav_grid - offset, wav_dep_scaling_ratio_2d_spec, color='red', alpha=0.4, label='wav dep scale')
+        plt.plot(wav_grid, fiber_dep_scaling_ratio_2d_spec, color='blue', alpha=0.6, label=f'fiber dep scale ({fiber_dep_scaling_ratio_2d_spec[0]:.3f})')
+        plt.plot(wav_grid, sky_combined_scaling_factor_2d_spec, color='black', alpha=0.7, label='combined')
+        # plt.plot(wav_grid, sky_combined_scaling_factor_masked_2d_spec, color='grey', linewidth=1, linestyle='--', alpha=0.5, zorder=5, label='combined, sky-line masked, norm')
+        
+        # plt.ylim(-30,30)
+
+        plt.xlabel('Wavelength [A]', fontsize=12, labelpad=15)
+        plt.ylabel('normalized intensity', fontsize=12, labelpad=15)
+        plt.legend(fontsize=12)
+
+        # Set png file
+        png_file = '{0}_sky_scaled_spectrum_of_fiber_{1}.png'.format(work['file'],fiber_num)
+        # Add output directory path to png file
+        png_file = os.path.join(work['output']['dir'], png_file)
+        # Save plot as png
+        plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+
+        print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
+
+    return
 
 # ---------------------------------------------------------------------------- #
 def set_curve_mask(image, work):
