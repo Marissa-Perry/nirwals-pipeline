@@ -203,7 +203,7 @@
                     "c. if 'value': thresh = value"
                 ],
                 "auto": {"sigma_clip": {"sigma": 2.5, "cenfunc": "median"}, "scale": 1.0},
-                "value": 0.1
+                "value": 0.5
             }
         }
     },
