@@ -863,80 +863,78 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     rectify_fibres(traces, fibres, ws, wf, work, log)
 
     ########## DEBUGGING ##############
-        # ------------------------------------------------------------ #
-    # DEBUG: check all matched-line residuals for sample fibres
-    # ------------------------------------------------------------ #
+    # check all matched-line residuals for sample fibres
 
-    print()
-    print("... checking all matched-line residuals after rectification ...")
+    # print()
+    # print("... checking all matched-line residuals after rectification ...")
 
-    sample_fibres = ['001', '050', '100', '150', '200', '248']
-    diff = int(0.5 * len(KERN) + 1)
+    # sample_fibres = ['001', '050', '100', '150', '200', '248']
+    # diff = int(0.5 * len(KERN) + 1)
 
-    for fibre_id in sample_fibres:
+    # for fibre_id in sample_fibres:
 
-        if fibre_id not in fibres:
-            continue
+    #     if fibre_id not in fibres:
+    #         continue
 
-        f = fibres[fibre_id]
+    #     f = fibres[fibre_id]
 
-        print()
-        print(f"fibre {fibre_id}")
+    #     print()
+    #     print(f"fibre {fibre_id}")
 
-        fibre_residuals = []
+    #     fibre_residuals = []
 
-        for w_ref in ws['wm']:
+    #     for w_ref in ws['wm']:
 
-            # local search window around each matched line
-            mask = (work['we'] > w_ref - 5.0) & (work['we'] < w_ref + 5.0)
-            wloc = work['we'][mask]
-            floc = f[mask]
+    #         # local search window around each matched line
+    #         mask = (work['we'] > w_ref - 5.0) & (work['we'] < w_ref + 5.0)
+    #         wloc = work['we'][mask]
+    #         floc = f[mask]
 
-            # skip if too few points or empty data
-            if wloc.size < 5 or np.all(np.isnan(floc)) or np.all(floc == 0):
-                print(f"  w_ref={w_ref:.3f}: no usable data")
-                continue
+    #         # skip if too few points or empty data
+    #         if wloc.size < 5 or np.all(np.isnan(floc)) or np.all(floc == 0):
+    #             print(f"  w_ref={w_ref:.3f}: no usable data")
+    #             continue
 
-            # smooth local segment
-            floc_s = smooth_flux_array(floc, **work['smooth']['arc'])
+    #         # smooth local segment
+    #         floc_s = smooth_flux_array(floc, **work['smooth']['arc'])
 
-            # guard against pathological windows
-            if not np.isfinite(np.nanmax(floc_s)) or np.nanmax(floc_s) <= 0:
-                print(f"  w_ref={w_ref:.3f}: invalid local flux")
-                continue
+    #         # guard against pathological windows
+    #         if not np.isfinite(np.nanmax(floc_s)) or np.nanmax(floc_s) <= 0:
+    #             print(f"  w_ref={w_ref:.3f}: invalid local flux")
+    #             continue
 
-            # find peaks in the local window
-            pks, _ = find_peaks(floc_s, height=0.5 * np.nanmax(floc_s))
+    #         # find peaks in the local window
+    #         pks, _ = find_peaks(floc_s, height=0.5 * np.nanmax(floc_s))
 
-            if len(pks) == 0:
-                print(f"  w_ref={w_ref:.3f}: no peak found")
-                continue
+    #         if len(pks) == 0:
+    #             print(f"  w_ref={w_ref:.3f}: no peak found")
+    #             continue
 
-            # choose detected peak closest to reference wavelength
-            cand = wloc[pks]
-            idx = np.argmin(np.abs(cand - w_ref))
-            guess = cand[idx]
+    #         # choose detected peak closest to reference wavelength
+    #         cand = wloc[pks]
+    #         idx = np.argmin(np.abs(cand - w_ref))
+    #         guess = cand[idx]
 
-            # centroid around chosen guess
-            peak = centroid(wloc, floc_s, kern=KERN, guess=guess, diff=diff)
-            delta = peak - w_ref
-            fibre_residuals.append(delta)
+    #         # centroid around chosen guess
+    #         peak = centroid(wloc, floc_s, kern=KERN, guess=guess, diff=diff)
+    #         delta = peak - w_ref
+    #         fibre_residuals.append(delta)
 
-            print(f"  w_ref={w_ref:.3f}, peak={peak:.3f}, delta={delta:.3f}")
+    #         print(f"  w_ref={w_ref:.3f}, peak={peak:.3f}, delta={delta:.3f}")
 
-        if len(fibre_residuals) > 0:
-            fibre_residuals = np.array(fibre_residuals, dtype=float)
-            print(
-                "  summary: "
-                f"median={np.median(fibre_residuals):.3f}, "
-                f"std={np.std(fibre_residuals):.3f}, "
-                f"min={np.min(fibre_residuals):.3f}, "
-                f"max={np.max(fibre_residuals):.3f}"
-            )
-        else:
-            print("  summary: no measurable lines")
+    #     if len(fibre_residuals) > 0:
+    #         fibre_residuals = np.array(fibre_residuals, dtype=float)
+    #         print(
+    #             "  summary: "
+    #             f"median={np.median(fibre_residuals):.3f}, "
+    #             f"std={np.std(fibre_residuals):.3f}, "
+    #             f"min={np.min(fibre_residuals):.3f}, "
+    #             f"max={np.max(fibre_residuals):.3f}"
+    #         )
+    #     else:
+    #         print("  summary: no measurable lines")
 
-    print()
+    # print()
     ###################################
 
 
@@ -1513,11 +1511,11 @@ def rectify(traces, fibres, ws, wf, work):
         # Interpolate 1D fibre flux array for evenly spaced wavelength array
 
         ######## DEBUGGING ###########
-        f = orient_fibre_flux(f)
-        f = np.interp(work['we'], w, f) # , left=0., right=0.)
+        # flip flux array to correct for detector geometry
+        f = orient_fibre_flux(f) 
         ##############################
 
-        # f = np.interp(work['we'], w, f) # , left=0., right=0.)   # DEBUGGING !!!!
+        f = np.interp(work['we'], w, f) # , left=0., right=0.)
         # Update 1D fibre flux array in extracted fibres dictionary
         fibres[fibre_id] = f
 
@@ -1658,10 +1656,8 @@ def fit_and_subtract_continuum_for_image(key, image, work, log):
     # Set mask in work dictionary
     work['image_mask'] = mask
 
-    ####### DEBUGGING ########
+    # same plotting as in below commented out block ...
     image_mask_diagnostic_plot(work, xarr, mask)
-    ##########################
-
 ####>
     # plt.figure(1, figsize=(16, 9), tight_layout=True)
     # ext = (xarr.min(), xarr.max(), 0, mask.shape[0])
@@ -1705,22 +1701,19 @@ def fit_spectral_channels(image, work, log):
     fit = work['spectral_channels']['fit']
 
     ####### DEBUG ######
-    print('\nsky-fit image generation...')
-    print('\n fit params:')
-    print(fit)
-    print()
-
-
     wav_grid = work['we']
-    wmin = 10250  # straddling a sky-line around 10300 A
+    wmin = 10250  # straddling a strong sky-line at ~10289 A
     wmax = 10350  # ''
 
-    # 10 evenly spaced wavelengths
-    sample_wavs = np.linspace(wmin, wmax, 10)
+    # 30 evenly spaced spectral channel wavelengths
+    sample_wavs = np.linspace(wmin, wmax, 30)
 
     # wavelengths to column indices
     diagnostic_cols = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs])
-    #############
+
+    # initialize list of fiber numbers that are major outliers in each diagnostic column
+    outlier_fiber_list = []
+    #####################
 
     # Loop for columns...
     for j in range(work['cols']):
@@ -1748,24 +1741,42 @@ def fit_spectral_channels(image, work, log):
 
         ####### DEBUG ######
         if j in diagnostic_cols:
-            sky_line_fit_image_diagnostic_plot(
-                work,
+            outlier_fibers = spec_channel_fit_diagnostic_plot(
+                work, 
                 input_flux=farr,
                 fit_flux=sf(work['s']),
                 mask=cm,
                 col=j
-            )
-        ####### DEBUG #######
+                )
+
+            # for all outlier fibers ...
+            if (len(outlier_fibers) > 0):
+                for fib_num in outlier_fibers:
+                    outlier_fiber_list.append(fib_num)
+        #####################
+    
+    # visualize the number counts on these outliers for our list of diagnostic columns ...
+    spec_channel_fit_outliers_diagnostic_plot(
+        work,
+        diagnostic_cols=diagnostic_cols,
+        wmin=wmin,
+        wmax=wmax,
+        outlier_fiber_list=outlier_fiber_list
+    )
 
     # Set NaN to 1
     sf_image[np.isnan(sf_image)] = 1.
 
     return sf_image
 
+
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
 def image_mask_diagnostic_plot(work, xarr, mask):
 # ---------------------------------------------------------------------------- #
+    '''
+    plotting the image mask, which masks out zero flux pixels on the edges of the rectified image
+    '''
     plt.figure(1, figsize=(16, 9), tight_layout=True)
     ext = (xarr.min(), xarr.max(), 0, mask.shape[0])
     plt.imshow(mask, extent=ext, origin='lower', aspect='auto', cmap='plasma')
@@ -1773,38 +1784,57 @@ def image_mask_diagnostic_plot(work, xarr, mask):
     plt.xlabel('wavelength [A]', fontsize=12, labelpad=15)
     plt.ylabel('fiber #', fontsize=12, labelpad=15)
     
-    
     # Set png file
     png_file = '{0}_image_mask.png'.format(work['file'])
     # Add output directory path to png file
     png_file = os.path.join(work['output']['dir'], png_file)
     # Save plot as png
     plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
-    
-    print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
-    # -----------------------------------------------------------
-
-    # # Clear current figure
-    # plt.clf()
-    # # Close current figure window (if any)
-    # plt.close()
+    plt.close()
 
     return
 
 
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def sky_line_fit_image_diagnostic_plot(work, input_flux, fit_flux, mask, col):
+def spec_channel_fit_diagnostic_plot(work, input_flux, fit_flux, mask, col):
 # ---------------------------------------------------------------------------- #
-
+    '''
+    plotting flux vs fiber for a given spectral channel and its resulting 1D fit (with sigma clipping)
+    '''
     fibre_index = work['s']
+
+    fibers = fibre_index[mask]
+    fluxes = input_flux[mask]
+    fluxes_fit = fit_flux[mask]
+    residuals = fluxes - fluxes_fit
+
+    # compute sigma of fit
+    # (using MAD instead of stdev to compute sigma to be more robust to outliers)
+    median_residuals = np.nanmedian(residuals)
+    abs_residual_difference = np.abs(residuals - median_residuals)
+    MAD = np.nanmedian(abs_residual_difference)
+    sigma = 1.4826 * MAD
+
+    sigma_threshold = 5.0
+    outlier_mask = abs_residual_difference > sigma_threshold * sigma
+    outlier_fibers = fibers[outlier_mask]
+
+    # # get a list of fibers that are outliers
+    # outlier_fibers = []
+    # for i, fiber_input_flux in enumerate(input_flux[mask]):
+    #     fiber_fit_flux = fit_flux[mask][i]
+
+    #     # if input flux values are 20 * the fit (roughly an outlier? need a better quantification)
+    #     if (fiber_input_flux > 15+fiber_fit_flux): #or (fiber_input_flux < 20/fiber_fit_flux):
+    #         outlier_fibers.append(fibre_index[mask][i])
 
     plt.figure(figsize=(8, 5))
 
-    plt.plot(input_flux[mask], fibre_index[mask], '.', label='input')
-    plt.plot(fit_flux[mask], fibre_index[mask], '-', label='sky fit')
+    plt.plot(fluxes, fibers, '.', label='input')
+    plt.plot(fluxes_fit, fibers, '-', label='spectral channel fit')
 
-    wav = work['we'][col] if 'we' in work else col
+    wav = work['we'][col]
 
     plt.title(f'column {col}, wavelength {wav:.2f} A')
     plt.xlabel('flux', fontsize=12, labelpad=15)
@@ -1817,17 +1847,41 @@ def sky_line_fit_image_diagnostic_plot(work, input_flux, fit_flux, mask, col):
     png_file = os.path.join(work['output']['dir'], png_file)
     # Save plot as png
     plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+    plt.close()
 
-    print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
-    # -----------------------------------------------------------
+    return outlier_fibers
 
-    # # Clear current figure
-    # plt.clf()
-    # # Close current figure window (if any)
-    # plt.close()
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def spec_channel_fit_outliers_diagnostic_plot(work, diagnostic_cols, wmin, wmax, outlier_fiber_list):
+# ---------------------------------------------------------------------------- #
+    '''
+    plotting the number count on fibers with outlier flux values for a subsample of spectral channel fits
+    '''
+    # number count on unique values
+    from collections import Counter
+    counts = Counter(outlier_fiber_list)
+    labels, values = zip(*sorted(counts.items()))
+
+    plt.figure(figsize=(8, 5))
+    plt.title(f'sky-fit outlier fibers (subsample of {len(diagnostic_cols)} channel fits from {wmin}-{wmax} A)')
+
+    plt.bar(labels, values)
+
+    plt.xlabel('fiber #', fontsize=12, labelpad=15)
+    plt.ylabel('count', fontsize=12, labelpad=15)
+    plt.legend(fontsize=12)
+
+    # Set png file
+    png_file = '{0}_sky_fit_outlier_fibers.png'.format(work['file'])
+    # Add output directory path to png file
+    png_file = os.path.join(work['output']['dir'], png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+    plt.close()
 
     return
-
 
 
 # ---------------------------------------------------------------------------- #
@@ -1983,13 +2037,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # rat_cs_2d = np.repeat(rat_cs_1d, rat_sf_image.shape[1], axis=1)   # renaming variables for plotting !!!
     rat_cs_2d_norm = np.repeat(rat_cs_1d_norm, rat_sf_image.shape[1], axis=1)
 
-    # plotting summed sky lines vs. fiber #
-    sky_line_sum_diagnostic_plot(work,
-                                 sky_spectral_sum_arr=sky_cs_1d, 
-                                 object_spectral_sum_arr=sci_cs_1d,
-                                 ratio_arr=rat_cs_1d,
-                                 norm_ratio_arr=rat_cs_1d_norm
-                                 )
+    sky_line_sum_diagnostic_plot(
+        work,
+        sky_spectral_sum_arr=sky_cs_1d, 
+        object_spectral_sum_arr=sci_cs_1d,
+        ratio_arr=rat_cs_1d,
+        norm_ratio_arr=rat_cs_1d_norm
+        )
     
     # Combine normalised wavelength and position scalings
     # rat_sf_image *= rat_cs_2d_norm                   # renaming variables for plotting !!!!        
@@ -2005,29 +2059,34 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # sky_scaled = sky_cs_image * rat_sf_image            # using renamed variable for plotting !!!!       
     sky_scaled = sky_cs_image * scaling_image_masked      # scaling the sky lines in the sky frame to the sky lines in the object frame
 
-    sky_line_scaling_diagnostic_plot(work, 
-                                     wav_dep_scaling_ratio_2d=rat_sf_image * gpm_image,
-                                     fiber_dep_scaling_ratio_2d=rat_cs_2d_norm,
-                                     sky_combined_scaling_factor_2d=scaling_image * gpm_image#,
-                                    #  sky_combined_scaling_factor_masked_2d=scaling_image_masked
-                                     )
+    sky_line_scaling_diagnostic_plot(
+        work,
+        sci_cs_image=sci_cs_image,
+        sky_cs_image=sky_cs_image,
+        wav_dep_scaling_ratio_2d=rat_sf_image,
+        fiber_dep_scaling_ratio_2d=rat_cs_2d_norm,
+        sky_combined_scaling_factor_2d=scaling_image_masked,
+        gpm_image=gpm_image
+        )
 
     # Subtract scaled image from object continuum subtracted image
     sci_image = sci_cs_image - sky_scaled
     # Add continuum back in
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image)
 
-    skyline_residuals_plot(work,
-                           flattened_obj_cs_2d=sci_image,
-                           gpm=gpm_image
-                           )
+    skyline_residuals_plot(
+        work,
+        flattened_obj_cs_2d=sci_image,
+        gpm=gpm_image
+        )
 
-    sky_line_flattening_diagnostic_plot(work, 
-                                        unscaled_sky_cs_2d = sky_cs_image, 
-                                        unflattened_obj_cs_2d = sci_cs_image,
-                                        scaled_sky_cs_2d = sky_scaled, 
-                                        flattened_obj_cs_2d = sci_image
-                                        )
+    sky_line_flattening_diagnostic_plot(
+        work, 
+        unscaled_sky_cs_2d = sky_cs_image, 
+        unflattened_obj_cs_2d = sci_cs_image,
+        scaled_sky_cs_2d = sky_scaled, 
+        flattened_obj_cs_2d = sci_image
+        )
 
     # Add sky subtracted header key
     value = time.asctime(time.localtime())
@@ -2039,11 +2098,12 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
 
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def skyline_residuals_plot(work,
-                           flattened_obj_cs_2d,
-                           gpm
-                           ):
+def skyline_residuals_plot(work, flattened_obj_cs_2d, gpm):
 # ---------------------------------------------------------------------------- #
+    '''
+    plotting the summed residual intensity of all skylines for each fiber in the object frame after subtraction.
+    These skylines are identified with the sky-fit images and meet the set threshold value.
+    '''
 
     # keep only skyline regions
     masked = flattened_obj_cs_2d * gpm
@@ -2064,7 +2124,7 @@ def skyline_residuals_plot(work,
     fibre_idx = np.arange(n_fibres)
 
     plt.figure(figsize=(8, 5))
-    plt.plot(fibre_idx, mean_resid, color='black', alpha=0.7, label='mean')
+    plt.plot(fibre_idx, mean_resid, color='black', alpha=0.3, label='mean')
     plt.plot(fibre_idx, median_resid, color='red', alpha=0.7, label='median')
     plt.axhline(0, color='grey', linestyle='--', alpha=0.4)
 
@@ -2080,33 +2140,19 @@ def skyline_residuals_plot(work,
     png_file = os.path.join(work['output']['dir'], png_file)
     # Save plot as png
     plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
-
-    print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
-    # -----------------------------------------------------------
-
-    # # Clear current figure
-    # plt.clf()
-    # # Close current figure window (if any)
-    # plt.close()
+    plt.close()
 
     return
 
 
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def sky_line_sum_diagnostic_plot(work, 
-                                 sky_spectral_sum_arr,
-                                 object_spectral_sum_arr,
-                                 ratio_arr,
-                                 norm_ratio_arr
-                                 ):
+def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum_arr, ratio_arr, norm_ratio_arr):
 # ---------------------------------------------------------------------------- #
-
-    # retrive spectra
-    unflattened_obj_cs_2dspec = sky_spectral_sum_arr[:, 0]  # flatten to have an array of values, one for each fiber
-    scaled_sky_cs_2d_spec = object_spectral_sum_arr[:, 0]
-    unscaled_sky_cs_2d_spec = ratio_arr[:, 0]
-    flattened_obj_cs_2d_spec = norm_ratio_arr[:, 0]
+    '''
+    plotting the summed skylines vs. fiber # for both object and sky cs frames.
+    the obj-to-sky ratio of these summed skylines is used as a fiber-dependent scale factor in the sky-subtraction step.
+    '''
 
     n_fibres = sky_spectral_sum_arr.shape[0]
     fibre_idx = np.arange(n_fibres)
@@ -2143,29 +2189,21 @@ def sky_line_sum_diagnostic_plot(work,
     png_file = os.path.join(work['output']['dir'], png_file)
     # Save plot as png
     plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
-
-    print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
-    # -----------------------------------------------------------
-
-    # # Clear current figure
-    # plt.clf()
-    # # Close current figure window (if any)
-    # plt.close()
+    plt.close()
 
     return
 
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def sky_line_flattening_diagnostic_plot(work, 
-                                        unscaled_sky_cs_2d, 
-                                        unflattened_obj_cs_2d,
-                                        scaled_sky_cs_2d, 
-                                        flattened_obj_cs_2d
-                                        ):
+def sky_line_flattening_diagnostic_plot(work, unscaled_sky_cs_2d, unflattened_obj_cs_2d, scaled_sky_cs_2d,  flattened_obj_cs_2d):
 # ---------------------------------------------------------------------------- #
     '''
-    want to plot raw, extracted spectrum for a given fiber along with its continuum fit (one color)
-    and the sky-line-flattened spectrum for the same fiber
+    visualizing components of the sky-subtraction step.
+    for a set of diagnostic fibers, this plots the 
+        1. object cs spectrum
+        2. sky cs spectrum
+        3. scaled sky cs spectrum
+        4. sky-subtracted object cs spectrum 
     '''
     # after rectification, all fibers share the same wavelength grid
     wav_grid = work['we']
@@ -2174,7 +2212,7 @@ def sky_line_flattening_diagnostic_plot(work,
     # choosing chunks fibers that will finely sample the bottom, middle, and top of the psuedo-slit
     # without plotting all of them
     # note that these numbers correspond to fiber position along psuedo slit, not the fiber IDs on the IFU
-    diagnostic_fibers = [10,15,100,105,205,210]  
+    diagnostic_fibers = [10, 40, 45, 100, 145, 150, 155, 160] 
     for fiber_num in diagnostic_fibers:
 
         # retrive spectra
@@ -2202,53 +2240,56 @@ def sky_line_flattening_diagnostic_plot(work,
         png_file = os.path.join(work['output']['dir'], png_file)
         # Save plot as png
         plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
-
-        print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
+        plt.close()
 
     return
 
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def sky_line_scaling_diagnostic_plot(work, 
-                                     wav_dep_scaling_ratio_2d,
-                                     fiber_dep_scaling_ratio_2d,
-                                     sky_combined_scaling_factor_2d#,
-                                    #  sky_combined_scaling_factor_masked_2d
-                                     ):
+def sky_line_scaling_diagnostic_plot(work, sci_cs_image, sky_cs_image, wav_dep_scaling_ratio_2d, fiber_dep_scaling_ratio_2d, sky_combined_scaling_factor_2d, gpm_image=None):
 # ---------------------------------------------------------------------------- #
     '''
-    ...
+    plotting both scale factors that are applied to the sky cs frame before subtracting it from the object cs frame
+    
+    scale factors:
+        1. fiber-dependent factor --> 2D array of ratios of the summed skylines in object and sky cs frames for each fiber
+        2. wavelength/temporal-dependent factor --> 2D array of ratios of the object and sky sky-fit (skyline-masked) frames
     '''
     # after rectification, all fibers share the same wavelength grid
     wav_grid = work['we']
-    offset = 10   #[A]
 
-    # choosing chunks fibers that will finely sample the bottom, middle, and top of the psuedo-slit
-    # without plotting all of them
-    # note that these numbers correspond to fiber position along psuedo slit, not the fiber IDs on the IFU
-    diagnostic_fibers = [10,15,100,105,205,210] 
+    diagnostic_fibers = [10, 40, 45, 100, 145, 150, 155, 160]
     for fiber_num in diagnostic_fibers:
 
-        # retrive spectra
-        wav_dep_scaling_ratio_2d_spec = wav_dep_scaling_ratio_2d[fiber_num,:]
-        fiber_dep_scaling_ratio_2d_spec = fiber_dep_scaling_ratio_2d[fiber_num,:]
-        sky_combined_scaling_factor_2d_spec = sky_combined_scaling_factor_2d[fiber_num,:]
-        # sky_combined_scaling_factor_masked_2d_spec = sky_combined_scaling_factor_masked_2d[fiber_num,:]
-
-        # plot the spectra
-        plt.figure(figsize=(8,5))
-
-        plt.title(f'sky-line scaling, fiber idx {fiber_num}', fontsize=11)  
-        plt.plot(wav_grid - offset, wav_dep_scaling_ratio_2d_spec, color='red', alpha=0.4, label='wav dep scale')
-        plt.plot(wav_grid, fiber_dep_scaling_ratio_2d_spec, color='blue', alpha=0.6, label=f'fiber dep scale ({fiber_dep_scaling_ratio_2d_spec[0]:.3f})')
-        plt.plot(wav_grid, sky_combined_scaling_factor_2d_spec, color='black', alpha=0.7, label='combined')
-        # plt.plot(wav_grid, sky_combined_scaling_factor_masked_2d_spec, color='grey', linewidth=1, linestyle='--', alpha=0.5, zorder=5, label='combined, sky-line masked, norm')
+        m = (gpm_image[fiber_num, :] == 1)  # all sky-line wavelengths
         
-        # plt.ylim(-30,30)
+        # ------- print stats for fiber ---------
+        print("fiber", fiber_num)
+        print("used scale median:", np.nanmedian(sky_combined_scaling_factor_2d[fiber_num, m]))
+        print("used scale min/max:", np.nanmin(sky_combined_scaling_factor_2d[fiber_num, m]), np.nanmax(sky_combined_scaling_factor_2d[fiber_num, m]))
+        print("obj/sky direct median:", np.nanmedian(sci_cs_image[fiber_num, m] / sky_cs_image[fiber_num, m]))
+        # ----------------------------------------
 
-        plt.xlabel('Wavelength [A]', fontsize=12, labelpad=15)
-        plt.ylabel('normalized intensity', fontsize=12, labelpad=15)
-        plt.legend(fontsize=12)
+        # sky-lines identified by threshold and sky-fit images
+        wav_ratio = wav_dep_scaling_ratio_2d[fiber_num, m]
+        fib_ratio = fiber_dep_scaling_ratio_2d[fiber_num, m]
+        combined = sky_combined_scaling_factor_2d[fiber_num, m]
+        wav_grid_masked = wav_grid[m]
+
+        plt.figure(figsize=(9, 5))
+
+        plt.title(f"sky-line scaling factors, fiber idx {fiber_num}", fontsize=11)
+
+        plt.step(wav_grid_masked, wav_ratio, where='mid', color='blue', linewidth=1, alpha=0.3, label='obj/sky sky-fit factor')
+        plt.step(wav_grid_masked, fib_ratio, where='mid', color='blue', linewidth=1, alpha=0.8, label=f'obj/sky skyline-sum factor ({fib_ratio[0]:.3f})')
+        plt.step(wav_grid_masked, combined, where='mid', color='black', linewidth=1, alpha=0.95, label='combined scaling')
+        # highlight sky-lines
+        for w in wav_grid_masked:
+            plt.axvline(w, color='grey', linestyle='--', linewidth=0.8, alpha=0.1)
+
+        plt.xlabel('wavelength [A]', fontsize=12, labelpad=15)
+        plt.ylabel('scale factor', fontsize=12, labelpad=15)
+        plt.legend(fontsize=10)
 
         # Set png file
         png_file = '{0}_sky_scaled_spectrum_of_fiber_{1}.png'.format(work['file'],fiber_num)
@@ -2256,10 +2297,11 @@ def sky_line_scaling_diagnostic_plot(work,
         png_file = os.path.join(work['output']['dir'], png_file)
         # Save plot as png
         plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
-
-        print('\nSAVING DIAGNOSTIC PLOT:',png_file,end='\n\n')
+        plt.close()
 
     return
+
+
 
 # ---------------------------------------------------------------------------- #
 def set_curve_mask(image, work):
