@@ -583,7 +583,8 @@ def extract_fibres_from_image(hdu, traces, work, log):
             return fibres
 
     # Set science image
-    sci = hdu[SCI].data.copy()
+    # sci = hdu[SCI].data.copy()  # renaming for diagnostic plotting !!!
+    sci_raw = hdu[SCI].data.copy()
 
     # Set bad pixel image
     bpm = hdu[BPM].data.copy()
@@ -596,7 +597,13 @@ def extract_fibres_from_image(hdu, traces, work, log):
         gpm[bpm == 1] = 0.
 
     # Set science image with gpm applied
-    sci *= gpm
+    # sci *= gpm   # renaming for diagnostic plotting !!!
+    sci = sci_raw * gpm
+
+    ####### DEBUGGING ########
+    bpm_mask_diagnostic_plot(work, sci_raw, sci, gpm)
+    ##########################
+
 
     # Set tag in work dictionary
     work['tag'] = 'main image'
@@ -642,7 +649,7 @@ def extract_fibres_from_image(hdu, traces, work, log):
         # Set non NaN science mask
         non_nan = ~np.isnan(sciarr)
         # Set good pixel array
-        gpmarr = fibres_gpm[id]
+        gpmarr = fibres_gpm[id]   # how many pixels contribute at each wavelength bin of "sciarr"
 
         # Check flat field image array
         if flt is not None:
@@ -655,6 +662,12 @@ def extract_fibres_from_image(hdu, traces, work, log):
             # Flat field science image array
             sciarr[mask] /= fltarr[mask]
 
+        # ------ RENORMALIZE FIBER FLUX: ------
+        # each wavelength bin contains multiple contributing pixels
+        # some wavelength bins have less after bpm masking
+        # need to conserve the flux at each wavelength
+        # scale up flux in each wavlength based on the number of good (contributing) pixels
+        # -------------------------------------
         # Set combined non NaN science and non zero good pixel mask
         mask = (non_nan) * (gpmarr != 0)
         # Scale fibre flux for 'nr' of good pixels:
@@ -677,6 +690,56 @@ def extract_fibres_from_image(hdu, traces, work, log):
         dump_extracted_fibres(fibres, work)
 
     return fibres
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def bpm_mask_diagnostic_plot(work, sci_raw, sci, gpm):
+# ---------------------------------------------------------------------------- #
+    '''
+    plotting the science image before and after bad-pixel masking
+    '''
+    bpm = (gpm == 0)
+
+    # difference between raw and masked image
+    difference = sci_raw - sci
+    # save scaling values derived from raw image (make sure saturated pixels don't dominate)
+    vmin_raw, vmax_raw = np.nanpercentile(sci_raw, [1,99.5])
+    vmin_bpm, vmax_bpm = np.nanpercentile(sci, [1,99.5])
+    vmin_dif, vmax_dif = np.nanpercentile(difference, [1,99.5])
+
+    fig, axes = plt.subplots(3, 1, figsize=(16, 12), tight_layout=True)
+
+    im0 = axes[0].imshow(sci_raw, origin='lower', aspect='auto', cmap='gray', vmin=vmin_raw, vmax=vmax_raw)
+    # axes[0].imshow(bpm, origin='lower', aspect='auto', cmap='Reds', alpha=0.5)  # overlay bpm
+    axes[0].set_title('raw sci image')
+    axes[0].set_ylabel('detector row')
+    plt.colorbar(im0, ax=axes[0], label='flux')
+
+    im1 = axes[1].imshow(sci, origin='lower', aspect='auto', cmap='gray', vmin=vmin_bpm, vmax=vmax_bpm)
+    axes[1].set_title('BPM-masked sci image')
+    axes[1].set_ylabel('detector row')
+    plt.colorbar(im1, ax=axes[1], label='flux')
+
+    im1 = axes[2].imshow(bpm, origin='lower', aspect='auto', cmap='gray')
+    axes[2].set_title('BPM')
+    axes[2].set_ylabel('detector row')
+    plt.colorbar(im1, ax=axes[2], label='flux')
+
+    # im2 = axes[2].imshow(difference, origin='lower', aspect='auto', cmap='gray', vmin=vmin_dif, vmax=vmax_dif)
+    # axes[2].set_title('masked pixels: raw - BPM-masked')
+    # axes[2].set_xlabel('detector column')
+    # axes[2].set_ylabel('detector row')
+    # plt.colorbar(im2, ax=axes[2], label='removed flux')
+    
+    # Set png file
+    png_file = '{0}_bpm_mask.png'.format(work['file'])
+    # Add output directory path to png file
+    png_file = os.path.join(work['output']['dir'], png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+    plt.close()
+
+    return
 
 # ---------------------------------------------------------------------------- #
 def load_extracted_fibres(work):
@@ -1026,7 +1089,7 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     write_new_fits(hdu, cs_image, None, '', 'cs', work, log)
 
     # Fit spectral channels
-    sf_image = fit_spectral_channels(cs_image, work, log)
+    sf_image = fit_spectral_channels(cs_image, work, log, gpcnt_image=gpcnt_image)  # DEBUG added gpcnt_image as a param for diagnostic plotting
     # Write new fits file: spectral channels fit
     write_new_fits(hdu, sf_image, None, '', 'sf', work, log)
 
@@ -1688,7 +1751,8 @@ def fit_continuum(key, tag, id, xarr, yarr, mask, work, log):
     return cf
 
 # ---------------------------------------------------------------------------- #
-def fit_spectral_channels(image, work, log):
+def fit_spectral_channels(image, work, log, gpcnt_image=None):
+    # DEBUG added gpcnt_image as a param for diagnostic plotting
 # ---------------------------------------------------------------------------- #
 
     # Add message to log
@@ -1984,10 +2048,66 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
 
     # Initialise object to sky spectral channels fit ratio image
     rat_sf_image = np.ones(sci_sf_image.shape, dtype=np.float32)  # all values initialized to 1
+
+    ###### DEBUGGING (commented out code) ########
     # Set non-zero mask from sky spectral channels fit image
     nz = sky_sf_image != 0.
     # Set object to sky spectral channels fit ratio
     rat_sf_image[nz] = sci_sf_image[nz] / sky_sf_image[nz]  # wavelength-dependent scaling of sky emission in obj and sky frames
+    ##############################################
+
+    # ######## DEBUGGING - instead of using sky-fit images for the correction factor, use cs images... #########
+    # # in this case, the sky-fit images are only used to define the sky-line and interline regions
+    # # correction factor is for temporal changes in sky-line intensity between sky and object frame
+    # #        --> use sky and obj cs images instead of sky-fit images for this
+
+    # # Set non-zero mask from sky spectral channels fit image
+    # nz = sky_cs_image != 0.
+    # # Set object to sky spectral channels fit ratio
+    # rat_sf_image[nz] = sci_cs_image[nz] / sky_cs_image[nz]  # wavelength-dependent scaling of sky emission in obj and sky frames
+
+    # ####### DEBUGGING - sky-fit correction factor is wavelength-averaged for each fiber #########
+
+    # # Set non-zero mask from sky spectral channels fit image
+    # nz = sky_sf_image != 0.
+
+    # rat_sf_2d = np.full(sci_sf_image.shape, np.nan, dtype=np.float32)
+    # rat_sf_2d[nz] = sci_sf_image[nz] / sky_sf_image[nz]
+
+    # rat_sf_per_fiber = np.nanmedian(rat_sf_2d, axis=1)
+
+    # # apply this same wavelength-dependent scale factor to all fibers
+    # rat_sf_image[:, :] = rat_sf_per_fiber[:, None]
+
+    # ######## DEBUGGING - sky-fit correction factor is fiber-averaged for each wavelength ##########
+
+    # # Set non-zero mask from sky spectral channels fit image
+    # nz = sky_sf_image != 0.
+    # # Set object to sky spectral channels fit ratio
+    # rat_sf_image[nz] = sci_sf_image[nz] / sky_sf_image[nz]  # wavelength-dependent scaling of sky emission in obj and sky frames
+
+    # # 1D array of correction factors (fiber-averaged factor for each wavelength)
+    # rat_sf_per_wav = np.nanmedian(rat_sf_image, axis=0)
+
+    # rat_sf_image = np.repeat(rat_sf_per_wav[None, :], sci_sf_image.shape[0], axis=0)
+
+    # ################ DEBUGGING -- each fiber has the same wavelength-dependent factor ########################
+    # # choose reference fiber row index (fiber #10 seems to have very few bad pixels, but this is a source fiber...)
+    # ref_fiber_idx = 18
+
+    # # extract the sky-fit spectra for that fiber
+    # sci_sf_ref = sci_sf_image[ref_fiber_idx, :]
+    # sky_sf_ref = sky_sf_image[ref_fiber_idx, :]
+
+    # # compute 1D wavelength-dependent ratio
+    # nz = sky_sf_ref != 0.
+
+    # rat_sf_ref = np.ones(sci_sf_ref.shape, dtype=np.float32)
+    # rat_sf_ref[nz] = sci_sf_ref[nz] / sky_sf_ref[nz]
+
+    # # apply this same wavelength-dependent scale factor to all fibers
+    # rat_sf_image[:, :] = rat_sf_ref[None, :]
+    # ##########################################################################################################
 
     # Initialise gpm image array (copy of sky spectral channels fit)
     gpm_image = sky_sf_image.copy()
@@ -2047,7 +2167,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     
     # Combine normalised wavelength and position scalings
     # rat_sf_image *= rat_cs_2d_norm                   # renaming variables for plotting !!!!        
-    scaling_image = rat_sf_image * rat_cs_2d_norm      # combining wavelength-dependent and fiber-dependent ratios
+    scaling_image = rat_sf_image * rat_cs_2d_norm    # combining wavelength-dependent and fiber-dependent ratios
     # Clean interline regions
     # rat_sf_image *= gpm_image              # renaming variables for plotting !!!!        
     scaling_image_masked = scaling_image * gpm_image         # interline regions set to 0
@@ -2270,7 +2390,6 @@ def sky_line_scaling_diagnostic_plot(work, sci_cs_image, sky_cs_image, wav_dep_s
         print("obj/sky direct median:", np.nanmedian(sci_cs_image[fiber_num, m] / sky_cs_image[fiber_num, m]))
         # ----------------------------------------
 
-        # sky-lines identified by threshold and sky-fit images
         wav_ratio = wav_dep_scaling_ratio_2d[fiber_num, m]
         fib_ratio = fiber_dep_scaling_ratio_2d[fiber_num, m]
         combined = sky_combined_scaling_factor_2d[fiber_num, m]
@@ -2280,12 +2399,12 @@ def sky_line_scaling_diagnostic_plot(work, sci_cs_image, sky_cs_image, wav_dep_s
 
         plt.title(f"sky-line scaling factors, fiber idx {fiber_num}", fontsize=11)
 
-        plt.step(wav_grid_masked, wav_ratio, where='mid', color='blue', linewidth=1, alpha=0.3, label='obj/sky sky-fit factor')
-        plt.step(wav_grid_masked, fib_ratio, where='mid', color='blue', linewidth=1, alpha=0.8, label=f'obj/sky skyline-sum factor ({fib_ratio[0]:.3f})')
-        plt.step(wav_grid_masked, combined, where='mid', color='black', linewidth=1, alpha=0.95, label='combined scaling')
+        plt.step(wav_grid_masked, wav_ratio, where='mid', color='blue', linewidth=1.2, alpha=0.3, label='obj/sky sky-fit factor')
+        plt.step(wav_grid_masked, fib_ratio, where='mid', color='blue', linewidth=1.2, alpha=0.8, label=f'obj/sky skyline-sum factor ({fib_ratio[0]:.3f})')
+        plt.step(wav_grid_masked, combined, where='mid', color='black', linewidth=0.6, alpha=0.95, label='combined scaling')
         # highlight sky-lines
         for w in wav_grid_masked:
-            plt.axvline(w, color='grey', linestyle='--', linewidth=0.8, alpha=0.1)
+            plt.axvline(w, color='grey', linestyle='--', linewidth=0.6, alpha=0.1)
 
         plt.xlabel('wavelength [A]', fontsize=12, labelpad=15)
         plt.ylabel('scale factor', fontsize=12, labelpad=15)
