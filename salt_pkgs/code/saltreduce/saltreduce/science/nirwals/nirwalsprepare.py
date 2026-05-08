@@ -114,6 +114,69 @@ def prepare_data(obs_date, log_file, **kwargs):
     return
 
 # ---------------------------------------------------------------------------- #
+def set_dark_file(hdulist, prd_dir, prefix, obs_date, subtract=True):
+# ---------------------------------------------------------------------------- #
+    """
+    Find master dark frame with the same exposure time as current image.
+    """
+
+    # check if dark subtraction
+    if not subtract:
+        return None
+
+    # get exposure time of current frame
+    exp_time = hdulist[PRIMARY].header['EXPTIME']
+    # Set wildcard for master dark file(s)
+    wildcard = '{0}{1}Dark*.fits'.format(prefix, obs_date)
+    # Add product data directory to wildcard
+    wildcard = os.path.join(prd_dir, wildcard)
+    # Get master dark file(s)
+    dark_files = sorted(glob.glob(wildcard))
+
+    if not dark_files:
+        raise FileNotFoundError('No master dark files found with wildcard: {0}'.format(wildcard))
+
+    for dark_file in dark_files:
+        with fits.open(dark_file, mode='readonly') as dark_hdu:
+            # get exposure time of dark frame
+            dark_exp_time = dark_hdu[PRIMARY].header['EXPTIME']
+            # match by exposure time
+            if dark_exp_time == exp_time:
+                return dark_file
+
+    raise ValueError('No matching master dark found for EXPTIME={0} using wildcard {1}'.format(exp_time, wildcard))
+
+
+# ---------------------------------------------------------------------------- #
+def dark_subtract_flat(hdulist, dark_file, log=None):
+# ---------------------------------------------------------------------------- #
+    """
+    Subtract master dark from the master flat
+    """
+
+    # ensure we don't subtract twice
+    if hdulist[PRIMARY].header.get('DARKSUB', False):
+        log.message(' - already dark subtracted', with_header=False)
+        # 'Beautify' log
+        log.message('', with_header=False)
+        return
+
+    with fits.open(dark_file, mode='readonly') as dark_hdu:
+        dark = dark_hdu[SCI].data.copy()
+
+    image = hdulist[SCI].data.copy()
+
+    hdulist[SCI].data = image - dark
+
+    hdulist[PRIMARY].header['DARKSUB'] = (True, 'Master dark subtracted')
+    hdulist[PRIMARY].header['DARKFILE'] = (os.path.basename(dark_file),'Master dark file')
+
+    log.message(' - subtract dark: {0}'.format(os.path.basename(dark_file)), with_header=False)
+    # 'Beautify' log
+    log.message('', with_header=False)
+    return
+
+# ---------------------------------------------------------------------------- #
 def prepare_flat_fit(obs_date, log, **kwargs):
 # ---------------------------------------------------------------------------- #
 
@@ -157,6 +220,16 @@ def prepare_flat_fit(obs_date, log, **kwargs):
 
         # Open flat field file
         with fits.open(flat_file, mode='append') as hdulist:
+        
+            ########### dark subtraction of master flat #########
+            # check if dark subtraction set in config
+            dark_cfg = config.get('dark', {})
+            dark_subtract = dark_cfg.get('subtract', False)
+
+            dark_file = set_dark_file(hdulist, prd_dir, prefix, obs_date, subtract=dark_subtract)
+            if dark_file is None:
+                dark_subtract_flat(hdulist, dark_file, log)
+            #####################################################
 
             # Check if FITEXT already exists
             if 'FITEXT' in hdulist[SCI].header:

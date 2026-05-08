@@ -158,6 +158,14 @@
         "arc": {"window_length": 5, "polyorder": 3}
     },
 
+    "dark": {
+        "subtract": true,
+        "notes": [
+            "a. dark subtraction performed using master dark files with a matching EXPTIME to each frame"
+
+        ]
+    },
+
     "flat": {
         "file": "",
         "type": {"arc": "none", "sky": "none", "science": "none"},
@@ -203,7 +211,7 @@
                     "c. if 'value': thresh = value"
                 ],
                 "auto": {"sigma_clip": {"sigma": 2.5, "cenfunc": "median"}, "scale": 1.0},
-                "value": 0.5
+                "value": 0.1
             }
         }
     },

@@ -561,6 +561,45 @@ def set_other_work_variables(hdu, traces, work):
 
     return
 
+# DEBUGGING
+# ---------------------------------------------------------------------------- #
+def set_dark_file(hdu, work):
+    '''
+    find master dark frame with the same exposure time as current image using HDU
+    '''
+# ---------------------------------------------------------------------------- #
+
+    # check if dark subtraction
+    dark_cfg = work.get('dark', {})
+    if not dark_cfg or not dark_cfg.get('subtract', False):
+        return None
+
+    # get exposure time of current frame
+    exp_time = hdu[PRIMARY].header['EXPTIME']
+    # set raw prefix and observation date
+    raw_prefix, obs_date = work['raw_prefix'], work['obs_date']
+    # Set wildcard for master dark file(s)
+    wildcard = '{0}{1}Dark*.fits'.format(raw_prefix, obs_date)
+    # Add product data directory to wildcard
+    wildcard = os.path.join(work['prd_dir'], wildcard)
+    # Get master dark file(s)
+    dark_files = sorted(glob.glob(wildcard))
+
+    if not dark_files:
+        raise FileNotFoundError('No master dark files found with wildcard: {0}'.format(wildcard))
+
+    for dark_file in dark_files:
+
+        with fits.open(dark_file, mode='readonly') as dark_hdu:
+
+            # match by exposure time
+            dark_exp_time = dark_hdu[PRIMARY].header['EXPTIME']
+            if dark_exp_time == exp_time:
+                return dark_file
+
+    raise ValueError('No matching master dark found for EXPTIME={0} using wildcard {1}'.format(exp_time, wildcard))
+
+
 # ---------------------------------------------------------------------------- #
 def extract_fibres_from_image(hdu, traces, work, log):
 # ---------------------------------------------------------------------------- #
@@ -586,6 +625,26 @@ def extract_fibres_from_image(hdu, traces, work, log):
     # sci = hdu[SCI].data.copy()  # renaming for diagnostic plotting !!!
     sci_raw = hdu[SCI].data.copy()
 
+    ######## DEBUG - DARK SUBTRACTION ##########
+    # find master dark frame with the same exposure time as current image (HDU)
+    dark_file = set_dark_file(hdu, work)  
+    
+    if dark_file is not None:
+        
+        # read and save master dark frame
+        with fits.open(dark_file, mode='readonly') as dark_hdu:
+            dark = dark_hdu[SCI].data.copy()
+
+        # dark subtract this frame
+        sci = sci_raw - dark
+
+        # debug
+        dark_sub_diagnostic_plot(work, sci_raw=sci_raw, sci_dark_sub=sci)
+
+    else:
+        sci = sci_raw.copy()
+    ############################################
+
     # Set bad pixel image
     bpm = hdu[BPM].data.copy()
     # Initialise good pixel image (same shape as bad pixel image)
@@ -596,14 +655,13 @@ def extract_fibres_from_image(hdu, traces, work, log):
         # Set good pixel image: good = 0 where bad = 1
         gpm[bpm == 1] = 0.
 
-    # Set science image with gpm applied
-    # sci *= gpm   # renaming for diagnostic plotting !!!
-    sci = sci_raw * gpm
-
     ####### DEBUGGING ########
-    bpm_mask_diagnostic_plot(work, sci_raw, sci, gpm)
+    sci_gpm = sci * gpm # for diagnostic plotting !!!
+    bpm_mask_diagnostic_plot(work, sci, sci_gpm, gpm)
     ##########################
 
+    # Set science image with gpm applied
+    sci *= gpm   
 
     # Set tag in work dictionary
     work['tag'] = 'main image'
@@ -690,6 +748,48 @@ def extract_fibres_from_image(hdu, traces, work, log):
         dump_extracted_fibres(fibres, work)
 
     return fibres
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def dark_sub_diagnostic_plot(work, sci_raw, sci_dark_sub):
+# ---------------------------------------------------------------------------- #
+    '''
+    plotting the science image before and after dark subtraction
+    '''
+
+    # difference between raw and dark subtracted image
+    difference = sci_raw - sci_dark_sub
+    # save scaling values derived from raw image (make sure saturated pixels don't dominate)
+    vmin_raw, vmax_raw = np.nanpercentile(sci_raw, [1,99.5])
+    vmin_sub, vmax_sub = np.nanpercentile(sci_dark_sub, [1,99.5])
+    vmin_dif, vmax_dif = np.nanpercentile(difference, [1,99.5])
+
+    fig, axes = plt.subplots(3, 1, figsize=(16, 12), tight_layout=True)
+
+    im0 = axes[0].imshow(sci_raw, origin='lower', aspect='auto', cmap='gray', vmin=vmin_raw, vmax=vmax_raw)
+    axes[0].set_title('raw image')
+    axes[0].set_ylabel('detector row')
+    plt.colorbar(im0, ax=axes[0], label='flux')
+
+    im1 = axes[1].imshow(sci_dark_sub, origin='lower', aspect='auto', cmap='gray', vmin=vmin_sub, vmax=vmax_sub)
+    axes[1].set_title('dark-subtracted image')
+    axes[1].set_ylabel('detector row')
+    plt.colorbar(im1, ax=axes[1], label='flux')
+
+    im1 = axes[2].imshow(difference, origin='lower', aspect='auto', cmap='gray', vmin=vmin_dif, vmax=vmax_dif)
+    axes[2].set_title('difference')
+    axes[2].set_ylabel('detector row')
+    plt.colorbar(im1, ax=axes[2], label='flux')
+    
+    # Set png file
+    png_file = '{0}_dark_sub.png'.format(work['file'])
+    # Add output directory path to png file
+    png_file = os.path.join(work['output']['dir'], png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=180, format='png', bbox_inches="tight")
+    plt.close()
+
+    return
 
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
@@ -1770,7 +1870,7 @@ def fit_spectral_channels(image, work, log, gpcnt_image=None):
     wmax = 10350  # ''
 
     # 30 evenly spaced spectral channel wavelengths
-    sample_wavs = np.linspace(wmin, wmax, 30)
+    sample_wavs = np.linspace(wmin, wmax, 10)
 
     # wavelengths to column indices
     diagnostic_cols = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs])
