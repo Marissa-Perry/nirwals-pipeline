@@ -9,6 +9,25 @@
         {
             "type": "module",
             "name": "saltreduce.science.nirwals.prepare_data",
+            "description": "generate bad-pixel mask",
+            "process": "single",
+            "status": 1,
+            "params": "params_nirwals_science.json",
+            "actions": [
+                {
+                    "type": "procedure",
+                    "name": "generate_bpm",
+                    "params": {
+                        "config": "nirwals/science_prepare.json"
+                    },
+                    "status": 1
+                }
+            ],
+            "stats": {"success": 0, "failure": 0, "populate": []}
+        },
+        {
+            "type": "module",
+            "name": "saltreduce.science.nirwals.prepare_data",
             "description": "prepare nir spectrograph flat field data",
             "process": "single",
             "status": 1,

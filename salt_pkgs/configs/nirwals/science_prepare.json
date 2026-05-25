@@ -29,6 +29,12 @@
         "subtract": true
     },
 
+    "bpm": {
+        "threshold": {
+            "value": 3.0
+        }
+    },
+
     "flat": {
         "reference": "",
         "continuum": {

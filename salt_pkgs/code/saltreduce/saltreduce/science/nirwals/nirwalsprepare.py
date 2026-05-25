@@ -114,6 +114,142 @@ def prepare_data(obs_date, log_file, **kwargs):
     return
 
 # ---------------------------------------------------------------------------- #
+def generate_bpm(obs_date, log, **kwargs):
+# ---------------------------------------------------------------------------- #
+    '''
+    Generate BPM from current night of observation.
+    Add BPM to each product file header.
+    Check that "AR-ANGLE" header exists in product files.
+    '''
+    # Set local variables for keyword arguments:
+    # - work directory
+    work_dir = kwargs['work_dir']
+    # Set instrument parameters:
+    # - data work folder
+    folder = kwargs['params']['data_dir']
+    # Set product data work directory for instrument
+    prd_dir = os.path.join(work_dir, '{0}/product'.format(folder))
+    # Get primary-reduced data files with wildcard in product data directory
+    wildcard = '*{0}*reduced.fits'.format(obs_date)
+    data_files = sorted(glob.glob(os.path.join(prd_dir, wildcard)))
+
+    # Set instrument work directory
+    wrk_dir = kwargs['params']['wrk_dir']
+    # Set bpm work subdirectory
+    sub_dir = kwargs['params']['sub_dirs']['bpm']
+    # Set bpm directory
+    bpm_dir = os.path.join(work_dir, folder, wrk_dir, sub_dir)
+    # Make bpm directory
+    os.makedirs(bpm_dir, exist_ok=True)
+
+    dark_files = []
+    dark_data = []
+    for file in data_files:
+        with fits.open(file) as hdul:
+            exp_type = hdul['PRIMARY'].header['EXPTYPE']
+
+            if exp_type == "Dark":
+                dark_files.append(file)
+                dark_data.append(hdul['SCI'].data)
+
+    dark_data = np.array(dark_data)
+    if len(dark_data) == 0:
+        raise RuntimeError(f'No dark files found for {obs_date}')
+    # average the darks
+    master_dark = np.median(dark_data, axis=0)  
+
+    # Set preparation config file
+    config_file = os.path.join(kwargs['config_dir'], kwargs['params']['config'])
+    # Load preparation config (JSON input file)
+    config = load_json_file(config_file)
+    # Set bpm threshold from config
+    bpm_thresh = config['bpm']['threshold']['value']
+
+    # initialise bpm 
+    bpm = np.zeros(master_dark.shape, dtype=np.float32)
+    # set good = 0, bad = 1 based on threshold
+    bpm[master_dark > bpm_thresh] = 1.
+    bad = len(bpm[bpm == 1])
+    perc_bad = (bad / bpm.size) * 100
+
+    # diagnostic plot for bpm threshold value
+    master_dark_arr = master_dark.flatten()
+    zoom_master_dark_arr = master_dark_arr[master_dark_arr < 30]
+    plt.figure(figsize=(8,5))
+    plt.hist(zoom_master_dark_arr, bins=200, color='black', alpha=0.9)
+    plt.axvline(bpm_thresh, color='red', linestyle='dotted', zorder=5, label=f'{perc_bad:.0f}% bad pixels, threshold={bpm_thresh}')
+    plt.yscale('log') 
+    plt.xlim(-10,30)
+    plt.xlabel('counts / s', fontsize=14, labelpad=15)
+    plt.ylabel('# of pixels', fontsize=14, labelpad=15)
+    plt.legend(fontsize=14, loc='upper right')
+    # Set png file
+    png_file = 'bpm_threshold.png'
+    # Add bpm directory path to png file
+    png_file = os.path.join(bpm_dir, png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=500, format='png', bbox_inches="tight")
+    plt.close()
+
+    # diagnostic plot for bpm image
+    plt.figure(figsize=(10,5))
+    plt.title(f'bpm, {perc_bad:.0f}% bad, threshold={bpm_thresh}', fontsize=12, pad=15)
+    plt.imshow(bpm, origin='lower', cmap='Greys_r', vmin=0, vmax=1) 
+    # Set png file
+    png_file = 'bpm_image.png'
+    # Add bpm directory path to png file
+    png_file = os.path.join(bpm_dir, png_file)
+    # Save plot as png
+    plt.savefig(png_file, dpi=500, format='png', bbox_inches="tight")
+    plt.close()
+
+    filename = f'NIRWALSBpm1x1_thresh_{bpm_thresh}.fits'
+    filepath = os.path.join(bpm_dir, filename)
+    print(f"\nWriting out BPM to: {filepath}", end='\n\n')
+    # set fits extensions
+    primary = fits.PrimaryHDU()
+    bpm_hdu = fits.ImageHDU(data=bpm.astype(np.float32), name='BPM')
+    # Add header keywords
+    bpm_hdu.header['COMMENT'] = f'Bad-pixel mask generated from median dark frame of {obs_date} observation. Threshold value of {bpm_thresh} results in {perc_bad:.0f}% bad pixels.'
+    # write out
+    hdul = fits.HDUList([primary, bpm_hdu])
+    hdul.writeto(filepath, overwrite=True)
+
+    # Get all fits file(s) in product data directory
+    wildcard = '*{0}*.fits'.format(obs_date)
+    prd_files = sorted(glob.glob(os.path.join(prd_dir, wildcard)))
+    for prd_file in prd_files:
+        basename = os.path.basename(prd_file)
+        try:
+            
+            with fits.open(prd_file, mode='update') as hdul:
+                # ------- add "BPM" hdu -------
+                hdu_names = [hdu.name for hdu in hdul]
+                # remove existing BPM extension if present
+                if 'BPM' in hdu_names:
+                    bpm_index = hdu_names.index('BPM')
+                    hdul.pop(bpm_index)
+                # create new BPM extension
+                bpm_hdu = fits.ImageHDU(data=bpm, name='BPM')
+                bpm_hdu.header['COMMENT'] = f'Bad-pixel mask generated from median dark frame of {obs_date} observation. Threshold value of {bpm_thresh} results in {perc_bad:.0f}% bad pixels.'
+                # append updated BPM
+                hdul.append(bpm_hdu)
+                # -----------------------------
+                # ----- check AR-ANGLE hdu -------
+                header = hdul['PRIMARY'].header
+                header_keys = list(header.keys())
+                # add AR-ANGLE if missing (use CAMANG value)
+                if 'AR-ANGLE' not in header_keys and 'CAMANG' in header_keys:
+                    header['AR-ANGLE'] = (header['CAMANG'], 'Articulation angle [degrees] (copied from CAMANG)')
+                # --------------------------------
+
+        except Exception as e:
+            print(f"Error processing {basename}: {e}")
+
+    return
+
+
+# ---------------------------------------------------------------------------- #
 def set_dark_file(hdulist, prd_dir, prefix, obs_date, subtract=True):
 # ---------------------------------------------------------------------------- #
     """
