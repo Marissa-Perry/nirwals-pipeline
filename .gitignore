@@ -14,6 +14,8 @@ wrappers/*.ipynb
 wrappers/generate*.py 
 # obs log data for generating obs log file (produced in primary data reduction)
 wrappers/obs_log_info/
+# debug plots
+wrappers/debug_plots/
 
 # Log files
 *.log
