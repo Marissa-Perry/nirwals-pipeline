@@ -9,20 +9,25 @@ def load_json(path):
         return json.load(f)
 
 
-def run_workflow(workflow_file, obs_date, param_dir, config_dir, work_dir, 
-                 saltdata_dir='', with_stdout=True, only_stdout=False):
-                # need saltdata_dir for nirwalsreduce to read, but do not have salt archive on local machine
-    
+def run_workflow(obs_date, workflow_filepath=None, with_stdout=True, only_stdout=False):
+
     # setting dirs as absolute paths
-    param_dir = os.path.abspath(param_dir)
-    config_dir = os.path.abspath(config_dir)
-    work_dir = os.path.abspath(work_dir)
+    param_rel_path = os.path.join('nirwals_pipeline','salt_pkgs','params')
+    param_dir = os.path.abspath(param_rel_path)
+    config_rel_path = os.path.join('nirwals_pipeline','salt_pkgs','configs')
+    config_dir = os.path.abspath(config_rel_path)
+    work_rel_path = os.path.join('nirwals_pipeline',str(obs_date))
+    work_dir = os.path.abspath(work_rel_path)
+    saltdata_dir = ''  # need saltdata_dir for nirwalsreduce to read, but do not have salt archive on local machine
 
     # if no work directory, make one
     os.makedirs(work_dir, exist_ok=True)
 
     # retireving workflow
-    workflow = load_json(workflow_file)
+    if not workflow_filepath:
+        # if one isn't passed, start with the main workflow file for the science DRP
+        workflow_filepath = os.path.join('nirwals_pipeline','salt_pkgs','workflows','nirwals','workflow_science_nirwals.json')
+    workflow = load_json(workflow_filepath)
 
     # retrieving log file
     log_file = workflow.get("log_file", "")
@@ -31,7 +36,7 @@ def run_workflow(workflow_file, obs_date, param_dir, config_dir, work_dir,
     for task in workflow["tasks"]:
         
         # terminal output for debugging
-        print(f"\n[WORKFLOW] {workflow_file}")
+        print(f"\n[WORKFLOW] {workflow_filepath}")
         print(f"   --- task: {task['name']}")
         print(f"   --- type = {task['type']}")
         print(f"   --- status = {task['status']}\n")
@@ -47,9 +52,9 @@ def run_workflow(workflow_file, obs_date, param_dir, config_dir, work_dir,
             print(f"          --> recursing into sub-workflow: {task['name']}\n")
             
             # retrieve sub-workflow file
-            sub_workflow = os.path.join(os.path.dirname(workflow_file), task["name"])
+            sub_workflow = os.path.join(os.path.dirname(workflow_filepath), task["name"])
             # recurse into sub-workflow
-            run_workflow(sub_workflow, obs_date, param_dir, config_dir, work_dir, saltdata_dir, with_stdout, only_stdout,)
+            run_workflow(obs_date, workflow_filepath=sub_workflow, with_stdout=with_stdout, only_stdout=only_stdout)
 
         # if task is a module, execute
         elif task["type"] == "module":
@@ -120,26 +125,18 @@ if __name__ == "__main__":
 
     # if input is not able to be passed, give instructions
     num_args = len(sys.argv)-1  # excluding initial python module command
-    if num_args != 5:
+    if num_args != 1:
         print('\n... not the right number of arguments...')
-        print('you passed',num_args, ' - expects 5:',end='\n\n')
+        print('you passed',num_args, ' - expects 1:',end='\n\n')
         print(sys.argv)
         print()
         print("Expected inputs:")
-        print("<workflow.json>")
-        print("<obs_date>")
-        print("<param_dir>")
-        print("<config_dir>")
-        print("<work_dir>\n")
+        print("<obs_date>\n")
         sys.exit(1)
 
     # 0th arg --> python command to run module
-    workflow_file = sys.argv[1]
-    obs_date = sys.argv[2]
-    param_dir = sys.argv[3]
-    config_dir = sys.argv[4]
-    work_dir = sys.argv[5]
+    obs_date = sys.argv[1]
 
-    run_workflow(workflow_file=workflow_file, obs_date=obs_date, param_dir=param_dir, config_dir=config_dir, work_dir=work_dir)
+    run_workflow(obs_date=obs_date)
 
 
