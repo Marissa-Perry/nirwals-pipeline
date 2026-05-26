@@ -59,11 +59,13 @@ def run_workflow(workflow_file, obs_date, param_dir, config_dir, work_dir,
 
             # translating workflow terms to primary functions in modules and saving as variables
             if task["name"].endswith(".prepare_data"):
-                module_path = "nirwals_pipeline.salt_pkgs.code.saltreduce.saltreduce.science.nirwals.nirwalsprepare"
+                # module_path = "nirwals_pipeline.salt_pkgs.code.saltreduce.saltreduce.science.nirwals.nirwalsprepare"
+                module_path = "nirwals_pipeline.salt_pkgs.code.saltreduce.science.nirwals.nirwalsprepare"
                 func_name = "prepare_data"
             # ''
             elif task["name"].endswith(".reduce_data"):
-                module_path = "nirwals_pipeline.salt_pkgs.code.saltreduce.saltreduce.science.nirwals.nirwalsreduce"
+                # module_path = "nirwals_pipeline.salt_pkgs.code.saltreduce.saltreduce.science.nirwals.nirwalsreduce"
+                module_path = "nirwals_pipeline.salt_pkgs.code.saltreduce.science.nirwals.nirwalsreduce"
                 func_name = "reduce_data"
             else:
                 raise ImportError(f"Unknown pipeline module: {task["name"]}")
