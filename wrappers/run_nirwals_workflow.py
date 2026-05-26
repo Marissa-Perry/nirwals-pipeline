@@ -16,7 +16,7 @@ def run_workflow(obs_date, workflow_filepath=None, with_stdout=True, only_stdout
     param_dir = os.path.abspath(param_rel_path)
     config_rel_path = os.path.join('nirwals_pipeline','salt_pkgs','configs')
     config_dir = os.path.abspath(config_rel_path)
-    work_rel_path = os.path.join('nirwals_pipeline',str(obs_date))
+    work_rel_path = os.path.join('nirwals_pipeline',str(obs_date))  # work directory is under the observation date directory
     work_dir = os.path.abspath(work_rel_path)
     saltdata_dir = ''  # need saltdata_dir for nirwalsreduce to read, but do not have salt archive on local machine
 
