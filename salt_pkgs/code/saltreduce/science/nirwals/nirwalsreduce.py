@@ -782,9 +782,11 @@ def dark_sub_diagnostic_plot(work, sci_raw, sci_dark_sub):
     plt.colorbar(im1, ax=axes[2], label='flux')
     
     # Set png file
-    png_file = os.path.join('plots','{0}_dark_sub.png'.format(work['file']))
+    plot_dir = os.path.join(work['output']['dir'],'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_dark_sub.png'.format(work['file'])
     # Add output directory path to png file
-    filepath = os.path.join(work['output']['dir'], png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
     plt.close()
@@ -832,9 +834,11 @@ def bpm_mask_diagnostic_plot(work, sci_raw, sci, gpm):
     # plt.colorbar(im2, ax=axes[2], label='removed flux')
     
     # Set png file
-    png_file = os.path.join('plots','{0}_bpm_mask.png'.format(work['file']))
+    plot_dir = os.path.join(work['output']['dir'],'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_bpm_mask.png'.format(work['file'])
     # Add output directory path to png file
-    filepath = os.path.join(work['output']['dir'], png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
     plt.close()
@@ -1949,9 +1953,11 @@ def image_mask_diagnostic_plot(work, xarr, mask):
     plt.ylabel('fiber #', fontsize=12, labelpad=15)
     
     # Set png file
-    png_file = os.path.join('plots','{0}_image_mask.png'.format(work['file']))
+    plot_dir = os.path.join(work['output']['dir'],'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_image_mask.png'.format(work['file'])
     # Add output directory path to png file
-    filepath = os.path.join(work['output']['dir'], png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
     plt.close()
@@ -2006,9 +2012,11 @@ def spec_channel_fit_diagnostic_plot(work, input_flux, fit_flux, mask, col):
     plt.legend(fontsize=12)
 
     # Set png file
-    png_file = os.path.join('plots','{0}_sky_fit_column_{1:04d}.png'.format(work['file'], col))
+    plot_dir = os.path.join(work['output']['dir'],'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_sky_fit_column_{1:04d}.png'.format(work['file'], col)
     # Add output directory path to png file
-    filepath = os.path.join(work['output']['dir'], png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
     plt.close()
@@ -2038,9 +2046,11 @@ def spec_channel_fit_outliers_diagnostic_plot(work, diagnostic_cols, wmin, wmax,
     plt.legend(fontsize=12)
 
     # Set png file
-    png_file = os.path.join('plots','{0}_sky_fit_outlier_fibers.png'.format(work['file']))
+    plot_dir = os.path.join(work['output']['dir'],'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_sky_fit_outlier_fibers.png'.format(work['file'])
     # Add output directory path to png file
-    filepath = os.path.join(work['output']['dir'], png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
     plt.close()
@@ -2355,9 +2365,11 @@ def skyline_residuals_plot(work, flattened_obj_cs_2d, gpm):
     plt.legend(fontsize=12)
 
     # Set png file
-    png_file = os.path.join('plots','{0}_residual_sky_vs_fiber_threshold_0.5.png'.format(work['file']))
+    plot_dir = os.path.join(work['output']['dir'],'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_residual_sky_vs_fiber_threshold_0.5.png'.format(work['file'])
     # Add output directory path to png file
-    filepath = os.path.join(work['output']['dir'], png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
     plt.close()
@@ -2386,9 +2398,11 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum
     plt.legend(fontsize=12)
 
     # Set png file
-    png_file = os.path.join('plots','{0}_summed_sky_lines_vs_fiber.png'.format(work['file']))
+    plot_dir = os.path.join(work['output']['dir'],'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_summed_sky_lines_vs_fiber.png'.format(work['file'])
     # Add output directory path to png file
-    filepath = os.path.join(work['output']['dir'], png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
 
@@ -2404,9 +2418,11 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum
     plt.legend(fontsize=12)
 
     # Set png file
-    png_file = os.path.join('plots','{0}_fiber_scaling_ratios.png'.format(work['file']))
+    plot_dir = os.path.join(work['output']['dir'],'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_fiber_scaling_ratios.png'.format(work['file'])
     # Add output directory path to png file
-    filepath = os.path.join(work['output']['dir'], png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
     plt.close()
@@ -2455,9 +2471,11 @@ def sky_line_flattening_diagnostic_plot(work, unscaled_sky_cs_2d, unflattened_ob
         plt.legend(fontsize=12)
 
         # Set png file
-        png_file = os.path.join('plots','{0}_sky_flattened_spectrum_of_fiber_{1}.png'.format(work['file'],fiber_num))
+        plot_dir = os.path.join(work['output']['dir'],'plots')
+        os.makedirs(plot_dir, exist_ok=True)
+        png_file = '{0}_sky_flattened_spectrum_of_fiber_{1}.png'.format(work['file'],fiber_num)
         # Add output directory path to png file
-        filepath = os.path.join(work['output']['dir'], png_file)
+        filepath = os.path.join(plot_dir, png_file)
         # Save plot as png
         plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
         plt.close()
@@ -2511,9 +2529,11 @@ def sky_line_scaling_diagnostic_plot(work, sci_cs_image, sky_cs_image, wav_dep_s
         plt.legend(fontsize=10)
 
         # Set png file
-        png_file = os.path.join('plots','{0}_sky_scaled_spectrum_of_fiber_{1}.png'.format(work['file'],fiber_num))
+        plot_dir = os.path.join(work['output']['dir'],'plots')
+        os.makedirs(plot_dir, exist_ok=True)
+        png_file = '{0}_sky_scaled_spectrum_of_fiber_{1}.png'.format(work['file'],fiber_num)
         # Add output directory path to png file
-        filepath = os.path.join(work['output']['dir'], png_file)
+        filepath = os.path.join(plot_dir, png_file)
         # Save plot as png
         plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
         plt.close()
@@ -3028,9 +3048,11 @@ def plot_wavelength_fit(ws, work, log):
     # Save figure
     if plot_dict['save']:
         # Set png file
-        png_file = os.path.join('plots','{0}_wavelength_fit.png'.format(work['file']))
+        plot_dir = os.path.join(work['output']['dir'],'plots')
+        os.makedirs(plot_dir, exist_ok=True)
+        png_file = '{0}_wavelength_fit.png'.format(work['file'])
         # Add output directory path to png file
-        filepath = os.path.join(work['output']['dir'], png_file)
+        filepath = os.path.join(plot_dir, png_file)
         # Save plot as png
         plt.savefig(filepath, dpi=180, format='png')
 
@@ -3170,11 +3192,13 @@ def plot_zero_points_fit(ws, work, log):
     # Save figure
     if plot_dict['save']:
         # Set png file
+        plot_dir = os.path.join(work['output']['dir'],'plots')
+        os.makedirs(plot_dir, exist_ok=True)
         png_file = '{0}_zps_fit.png'.format(work['file'])
         # Add output directory path to png file
-        png_file = os.path.join(work['output']['dir'], png_file)
+        filepath = os.path.join(plot_dir, png_file)
         # Save plot as png
-        plt.savefig(png_file, dpi=180, format='png')
+        plt.savefig(filepath, dpi=180, format='png')
 
     # Show figure
     if plot_dict['show']: plt.show()

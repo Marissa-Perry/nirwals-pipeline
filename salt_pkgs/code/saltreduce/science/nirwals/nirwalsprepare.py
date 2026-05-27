@@ -184,9 +184,11 @@ def generate_bpm(obs_date, log, **kwargs):
     plt.ylabel('# of pixels', fontsize=14, labelpad=15)
     plt.legend(fontsize=14, loc='upper right')
     # Set png file
-    png_file = os.path.join('plots','bpm_threshold.png')
+    plot_dir = os.path.join(bpm_dir,'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = 'bpm_threshold.png'
     # Add bpm directory path to png file
-    filepath = os.path.join(bpm_dir, png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
     plt.close()
@@ -196,9 +198,11 @@ def generate_bpm(obs_date, log, **kwargs):
     plt.title(f'bpm, {perc_bad:.0f}% bad, threshold={bpm_thresh}', fontsize=12, pad=15)
     plt.imshow(bpm, origin='lower', cmap='Greys_r', vmin=0, vmax=1) 
     # Set png file
-    png_file = os.path.join('plots','bpm_image.png')
+    plot_dir = os.path.join(bpm_dir,'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = 'bpm_image.png'
     # Add bpm directory path to png file
-    filepath = os.path.join(bpm_dir, png_file)
+    filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
     plt.close()
