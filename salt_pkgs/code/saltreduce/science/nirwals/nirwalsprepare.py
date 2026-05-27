@@ -470,7 +470,7 @@ def prepare_fibres_config(obs_date, log, **kwargs):
     # - instrument file (raw) prefix
     prefix = kwargs['params']['raw_prefix']
     # Set product data work directory for instrument
-    prd_dir = path.join(work_dir, '{0}/product'.format(folder))
+    prd_dir = os.path.join(work_dir, '{0}/product'.format(folder))
     # Get combined flat field file(s) with wildcard in product data directory
     wildcard = '{0}{1}Flat*.fits'.format(prefix, obs_date)
     flat_files = sorted(glob.glob(os.path.join(prd_dir, wildcard)))
