@@ -17,6 +17,7 @@ from datetime import datetime
 import numpy as np
 # astropy import
 from astropy.io import fits
+from astropy.stats import mad_std
 # matplotlib imports
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
@@ -142,60 +143,144 @@ def generate_bpm(obs_date, log, **kwargs):
     # Make bpm directory
     os.makedirs(bpm_dir, exist_ok=True)
 
-    dark_files = []
-    dark_data = []
-    for file in data_files:
-        with fits.open(file) as hdul:
-            exp_type = hdul['PRIMARY'].header['EXPTYPE']
-
-            if exp_type == "Dark":
-                dark_files.append(file)
-                dark_data.append(hdul['SCI'].data)
-
-    dark_data = np.array(dark_data)
-    if len(dark_data) == 0:
-        raise RuntimeError(f'No dark files found for {obs_date}')
-    # average the darks
-    master_dark = np.median(dark_data, axis=0)  
-
     # Set preparation config file
     config_file = os.path.join(kwargs['config_dir'], kwargs['params']['config'])
     # Load preparation config (JSON input file)
     config = load_json_file(config_file)
-    # Set bpm threshold from config
-    bpm_thresh = config['bpm']['threshold']['value']
+    # Set bpm sigma threshold factor from config
+    bpm_thresh_sigma = config['bpm']['threshold']['sigma']
 
-    # initialise bpm 
+    flat_files = []
+    flat_data = []
+    dark_files = []
+    dark_data = []
+    flag_data = []
+    for file in data_files:
+        with fits.open(file) as hdul:
+            exp_type = hdul['PRIMARY'].header['EXPTYPE']
+
+            if exp_type == "Flat field":
+                flat_files.append(file)
+                flat_data.append(hdul['SCI'].data)
+
+            elif exp_type == "Dark":
+                dark_files.append(file)
+                dark_data.append(hdul['SCI'].data)
+
+            flag_data.append(hdul['FLAGS'].data)  # pixels flagged during Ralph's image reduction script (up-the-ramp sampling)
+
+    # average the darks
+    dark_data = np.array(dark_data)
+    if len(dark_data) == 0:
+        raise RuntimeError(f'No dark files found for {obs_date}')
+    master_dark = np.median(dark_data, axis=0)  
+
+    # average the flats
+    flat_data = np.array(flat_data)
+    if len(flat_data) == 0:
+        raise RuntimeError(f'No flat field files found for {obs_date}')
+    master_flat = np.median(flat_data, axis=0)  
+
+    # initialise a BPM 
     bpm = np.zeros(master_dark.shape, dtype=np.float32)
-    # set good = 0, bad = 1 based on threshold
-    bpm[master_dark > bpm_thresh] = 1.
-    bad = len(bpm[bpm == 1])
-    perc_bad = (bad / bpm.size) * 100
 
-    # diagnostic plot for bpm threshold value
-    master_dark_arr = master_dark.flatten()
-    zoom_master_dark_arr = master_dark_arr[master_dark_arr < 30]
-    plt.figure(figsize=(8,5))
-    plt.hist(zoom_master_dark_arr, bins=200, color='black', alpha=0.9)
-    plt.axvline(bpm_thresh, color='red', linestyle='dotted', zorder=5, label=f'{perc_bad:.0f}% bad pixels, threshold={bpm_thresh}')
-    plt.yscale('log') 
-    plt.xlim(-10,30)
-    plt.xlabel('counts / s', fontsize=14, labelpad=15)
-    plt.ylabel('# of pixels', fontsize=14, labelpad=15)
-    plt.legend(fontsize=14, loc='upper right')
+     # ----------- BPM generated from flags -----------
+    # set good = 0, bad = 1 based on flagged pixels during up-the-ramp sampling in Ralph's image reduction script
+    # note: only using flags from first exposure
+    bpm[flag_data[0] == 1] = 1.
+
+    # flags for each exposure seem identical. Just displaying the first one for reference
+    first_flagged_data = flag_data[0]
+    bad_flag_perc = (len(flag_data[0][flag_data[0] == 1]) / first_flagged_data.size) * 100
+
+    plt.figure(figsize=(10,5))
+    plt.title(f'flagged pixels, {bad_flag_perc:.1f}% bad', fontsize=12, pad=15)
+    plt.imshow(first_flagged_data, origin='lower', cmap='Greys_r', vmin=0, vmax=1)
     # Set png file
     plot_dir = os.path.join(bpm_dir,'plots')
     os.makedirs(plot_dir, exist_ok=True)
-    png_file = 'bpm_threshold.png'
+    png_file = 'flag_image.png'
     # Add bpm directory path to png file
     filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
     plt.close()
+    # --------------------------------------------------
+    # --------- BPM generated from master dark ---------
+    median_dark = np.median(master_dark)
+    sigma_dark = mad_std(master_dark)  # sigma of a non-Gaussian distribution
+    # compute the threshold values [counts/s]
+    sigma_upper_dark = median_dark + bpm_thresh_sigma * sigma_dark  
+    sigma_lower_dark = median_dark - bpm_thresh_sigma * sigma_dark
+    # set good = 0, bad = 1 based on sigma threshold
+    bpm[(master_dark > sigma_upper_dark) | (master_dark < sigma_lower_dark)] = 1.
+
+    # diagnostic plot for bpm threshold value
+    master_dark_arr = master_dark.flatten()
+    zoom_master_dark_arr = master_dark_arr[master_dark_arr < 30]
+    bad_dark_perc = (len(master_dark[(master_dark > sigma_upper_dark) | (master_dark < sigma_lower_dark)]) / master_dark.size) * 100
+    plt.figure(figsize=(8,5))
+    plt.title(fr'master dark pixels, {bad_dark_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
+    plt.hist(zoom_master_dark_arr, bins=200, color='black', alpha=0.9)
+    plt.axvline(median_dark, color='red', linestyle='dotted', label='median')
+    plt.axvline(sigma_upper_dark, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
+    plt.axvline(sigma_lower_dark, color='grey', linestyle='dotted')
+    plt.yscale('log') 
+    plt.xlim(-10,30)
+    plt.xlabel('counts / s', fontsize=14, labelpad=15)
+    plt.ylabel('# of pixels', fontsize=14, labelpad=15)
+    plt.legend(fontsize=13, loc='upper right')
+    # Set png file
+    plot_dir = os.path.join(bpm_dir,'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = 'master_dark_threshold.png'
+    # Add bpm directory path to png file
+    filepath = os.path.join(plot_dir, png_file)
+    # Save plot as png
+    plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
+    plt.close()
+    # ---------------------------------------------------
+    # --------- BPM generated from master flat ----------
+    median_flat = np.median(master_flat)
+    sigma_flat = mad_std(master_flat)  # sigma of a non-Gaussian distribution
+    # compute the threshold values [counts/s]
+    sigma_upper_flat = median_flat + bpm_thresh_sigma * sigma_flat  
+    sigma_lower_flat = median_flat - bpm_thresh_sigma * sigma_flat
+    # set good = 0, bad = 1 based on sigma threshold
+    bpm[(master_flat > sigma_upper_flat) | (master_flat < sigma_lower_flat)] = 1.
+
+    master_flat_arr = master_flat.flatten()
+    zoom_master_flat_arr = master_flat_arr[master_flat_arr < 10**(4.5)]
+    bad_flat_perc = (len(master_flat[(master_flat > sigma_upper_flat) | (master_flat < sigma_lower_flat)]) / master_flat.size) * 100
+    plt.figure(figsize=(8,5))
+    plt.title(fr'master flat pixels {bad_flat_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
+    plt.hist(zoom_master_flat_arr, bins=100, color='black', alpha=0.9)
+    plt.axvline(median_flat, color='red', linestyle='dotted', label='median')
+    plt.axvline(sigma_upper_flat, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
+    plt.axvline(sigma_lower_flat, color='grey', linestyle='dotted')
+    plt.yscale('log') 
+    plt.xlim(-10**(4.5),10**(4.5))
+    plt.xlabel('counts / s', fontsize=14, labelpad=15)
+    plt.ylabel('# of pixels', fontsize=14, labelpad=15)
+    plt.legend(fontsize=13, loc='upper right')
+     # Set png file
+    plot_dir = os.path.join(bpm_dir,'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = 'master_flat_threshold.png'
+    # Add bpm directory path to png file
+    filepath = os.path.join(plot_dir, png_file)
+    # Save plot as png
+    plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
+    plt.close()
+    # ---------------------------------------------------
+
+    # compute the percentage of bad pixels in this BPM
+    bad = len(bpm[bpm == 1])
+    perc_bad = (bad / bpm.size) * 100
 
     # diagnostic plot for bpm image
     plt.figure(figsize=(10,5))
-    plt.title(f'bpm, {perc_bad:.0f}% bad, threshold={bpm_thresh}', fontsize=12, pad=15)
+    plt.title(fr'{perc_bad:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=12, pad=15)
     plt.imshow(bpm, origin='lower', cmap='Greys_r', vmin=0, vmax=1) 
     # Set png file
     plot_dir = os.path.join(bpm_dir,'plots')
@@ -207,14 +292,14 @@ def generate_bpm(obs_date, log, **kwargs):
     plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
     plt.close()
 
-    filename = f'NIRWALSBpm1x1_thresh_{bpm_thresh}.fits'
+    filename = f'NIRWALSBpm1x1_{bpm_thresh_sigma}sigma.fits'
     filepath = os.path.join(bpm_dir, filename)
     print(f"\nWriting out BPM to: {filepath}", end='\n\n')
     # set fits extensions
     primary = fits.PrimaryHDU()
     bpm_hdu = fits.ImageHDU(data=bpm.astype(np.float32), name='BPM')
     # Add header keywords
-    bpm_hdu.header['COMMENT'] = f'Bad-pixel mask generated from median dark frame of {obs_date} observation. Threshold value of {bpm_thresh} results in {perc_bad:.0f}% bad pixels.'
+    bpm_hdu.header['COMMENT'] = f'Bad-pixel mask generated from median dark frame of {obs_date} observation. Threshold value of {bpm_thresh_sigma}sigma results in {perc_bad:.1f}% bad pixels.'
     # write out
     hdul = fits.HDUList([primary, bpm_hdu])
     hdul.writeto(filepath, overwrite=True)
@@ -235,7 +320,7 @@ def generate_bpm(obs_date, log, **kwargs):
                     hdul.pop(bpm_index)
                 # create new BPM extension
                 bpm_hdu = fits.ImageHDU(data=bpm, name='BPM')
-                bpm_hdu.header['COMMENT'] = f'Bad-pixel mask generated from median dark frame of {obs_date} observation. Threshold value of {bpm_thresh} results in {perc_bad:.0f}% bad pixels.'
+                bpm_hdu.header['COMMENT'] = f'Bad-pixel mask generated from median dark frame of {obs_date} observation. Threshold value of {bpm_thresh_sigma}sigma results in {perc_bad:.1f}% bad pixels.'
                 # append updated BPM
                 hdul.append(bpm_hdu)
                 # -----------------------------

@@ -655,11 +655,6 @@ def extract_fibres_from_image(hdu, traces, work, log):
         # Set good pixel image: good = 0 where bad = 1
         gpm[bpm == 1] = 0.
 
-    ####### DEBUGGING ########
-    sci_gpm = sci * gpm # for diagnostic plotting !!!
-    bpm_mask_diagnostic_plot(work, sci, sci_gpm, gpm)
-    ##########################
-
     # Set science image with gpm applied
     sci *= gpm   
 
@@ -793,57 +788,6 @@ def dark_sub_diagnostic_plot(work, sci_raw, sci_dark_sub):
 
     return
 
-# TEST DIAGNOSTIC PLOT
-# ---------------------------------------------------------------------------- #
-def bpm_mask_diagnostic_plot(work, sci_raw, sci, gpm):
-# ---------------------------------------------------------------------------- #
-    '''
-    plotting the science image before and after bad-pixel masking
-    '''
-    bpm = (gpm == 0)
-
-    # difference between raw and masked image
-    difference = sci_raw - sci
-    # save scaling values derived from raw image (make sure saturated pixels don't dominate)
-    vmin_raw, vmax_raw = np.nanpercentile(sci_raw, [1,99.5])
-    vmin_bpm, vmax_bpm = np.nanpercentile(sci, [1,99.5])
-    vmin_dif, vmax_dif = np.nanpercentile(difference, [1,99.5])
-
-    fig, axes = plt.subplots(3, 1, figsize=(16, 12), tight_layout=True)
-
-    im0 = axes[0].imshow(sci_raw, origin='lower', aspect='auto', cmap='gray', vmin=vmin_raw, vmax=vmax_raw)
-    # axes[0].imshow(bpm, origin='lower', aspect='auto', cmap='Reds', alpha=0.5)  # overlay bpm
-    axes[0].set_title('raw sci image')
-    axes[0].set_ylabel('detector row')
-    plt.colorbar(im0, ax=axes[0], label='flux')
-
-    im1 = axes[1].imshow(sci, origin='lower', aspect='auto', cmap='gray', vmin=vmin_bpm, vmax=vmax_bpm)
-    axes[1].set_title('BPM-masked sci image')
-    axes[1].set_ylabel('detector row')
-    plt.colorbar(im1, ax=axes[1], label='flux')
-
-    im1 = axes[2].imshow(bpm, origin='lower', aspect='auto', cmap='gray')
-    axes[2].set_title('BPM')
-    axes[2].set_ylabel('detector row')
-    plt.colorbar(im1, ax=axes[2], label='flux')
-
-    # im2 = axes[2].imshow(difference, origin='lower', aspect='auto', cmap='gray', vmin=vmin_dif, vmax=vmax_dif)
-    # axes[2].set_title('masked pixels: raw - BPM-masked')
-    # axes[2].set_xlabel('detector column')
-    # axes[2].set_ylabel('detector row')
-    # plt.colorbar(im2, ax=axes[2], label='removed flux')
-    
-    # Set png file
-    plot_dir = os.path.join(work['output']['dir'],'plots')
-    os.makedirs(plot_dir, exist_ok=True)
-    png_file = '{0}_bpm_mask.png'.format(work['file'])
-    # Add output directory path to png file
-    filepath = os.path.join(plot_dir, png_file)
-    # Save plot as png
-    plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
-    plt.close()
-
-    return
 
 # ---------------------------------------------------------------------------- #
 def load_extracted_fibres(work):

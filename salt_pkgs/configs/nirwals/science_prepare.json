@@ -31,7 +31,7 @@
 
     "bpm": {
         "threshold": {
-            "value": 3.0
+            "sigma": 5.0
         }
     },
 
