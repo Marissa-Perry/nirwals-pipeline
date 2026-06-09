@@ -1867,15 +1867,6 @@ def fit_spectral_channels(image, work, log, gpcnt_image=None):
                     outlier_fiber_list.append(fib_num)
         #####################
     
-    # visualize the number counts on these outliers for our list of diagnostic columns ...
-    spec_channel_fit_outliers_diagnostic_plot(
-        work,
-        diagnostic_cols=diagnostic_cols,
-        wmin=wmin,
-        wmax=wmax,
-        outlier_fiber_list=outlier_fiber_list
-    )
-
     # Set NaN to 1
     sf_image[np.isnan(sf_image)] = 1.
 
@@ -1966,40 +1957,6 @@ def spec_channel_fit_diagnostic_plot(work, input_flux, fit_flux, mask, col):
     plt.close()
 
     return outlier_fibers
-
-
-# TEST DIAGNOSTIC PLOT
-# ---------------------------------------------------------------------------- #
-def spec_channel_fit_outliers_diagnostic_plot(work, diagnostic_cols, wmin, wmax, outlier_fiber_list):
-# ---------------------------------------------------------------------------- #
-    '''
-    plotting the number count on fibers with outlier flux values for a subsample of spectral channel fits
-    '''
-    # number count on unique values
-    from collections import Counter
-    counts = Counter(outlier_fiber_list)
-    labels, values = zip(*sorted(counts.items()))
-
-    plt.figure(figsize=(8, 5))
-    plt.title(f'sky-fit outlier fibers (subsample of {len(diagnostic_cols)} channel fits from {wmin}-{wmax} A)')
-
-    plt.bar(labels, values)
-
-    plt.xlabel('fiber #', fontsize=12, labelpad=15)
-    plt.ylabel('count', fontsize=12, labelpad=15)
-    plt.legend(fontsize=12)
-
-    # Set png file
-    plot_dir = os.path.join(work['output']['dir'],'plots')
-    os.makedirs(plot_dir, exist_ok=True)
-    png_file = '{0}_sky_fit_outlier_fibers.png'.format(work['file'])
-    # Add output directory path to png file
-    filepath = os.path.join(plot_dir, png_file)
-    # Save plot as png
-    plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
-    plt.close()
-
-    return
 
 
 # ---------------------------------------------------------------------------- #
@@ -2206,7 +2163,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     rat_cs_1d[nz] = sci_cs_1d[nz] / sky_cs_1d[nz]        
     # Normalise object to sky continuum subtracted ratio array (1D)
     # rat_cs_1d /= rat_cs_1d.mean()     # renaming variables for plotting !!!!
-    rat_cs_1d_norm = rat_cs_1d / rat_cs_1d.mean()
+    rat_cs_1d_norm = rat_cs_1d / rat_cs_1d.mean()   # try median
     # Repeat 1D object to sky ratio to same column dimension as 2D images
     # rat_cs_2d = np.repeat(rat_cs_1d, rat_sf_image.shape[1], axis=1)   # renaming variables for plotting !!!
     rat_cs_2d_norm = np.repeat(rat_cs_1d_norm, rat_sf_image.shape[1], axis=1)
@@ -2695,6 +2652,9 @@ def link_exposure_files(work, log):
                 src_file = exposure['file']
                 # Set destination directory
                 dst_dir = os.path.join(exposure['proposal'], 'product')
+
+                # if no destination directory, make one
+                os.makedirs(dst_dir, exist_ok=True)
 
                 # Add message to log
                 msg = ' - {0} -> {1}'.format(src_name, dst_dir)
