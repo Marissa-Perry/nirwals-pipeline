@@ -184,18 +184,18 @@ def generate_bpm(obs_date, log, **kwargs):
     # initialise a BPM 
     bpm = np.zeros(master_dark.shape, dtype=np.float32)
 
-     # ----------- BPM generated from flags -----------
+    # ----------- BPM generated from flags -----------
     # set good = 0, bad = 1 based on flagged pixels during up-the-ramp sampling in Ralph's image reduction script
-    # note: only using flags from first exposure
-    bpm[flag_data[0] == 1] = 1.
-
-    # flags for each exposure seem identical. Just displaying the first one for reference
-    first_flagged_data = flag_data[0]
-    bad_flag_perc = (len(flag_data[0][flag_data[0] == 1]) / first_flagged_data.size) * 100
+    # ensures any pixel flagged in any exposure for that night gets included in the BPM
+    flag_union = np.zeros_like(flag_data[0])
+    for flags in flag_data:
+        flag_union[flags == 1] = 1
+    bpm[flag_union == 1] = 1.
+    bad_flag_perc = (flag_union.sum() / flag_union.size) * 100
 
     plt.figure(figsize=(10,5))
     plt.title(f'flagged pixels, {bad_flag_perc:.1f}% bad', fontsize=12, pad=15)
-    plt.imshow(first_flagged_data, origin='lower', cmap='Greys_r', vmin=0, vmax=1)
+    plt.imshow(flag_union, origin='lower', cmap='Greys_r', vmin=0, vmax=1)
     # Set png file
     plot_dir = os.path.join(bpm_dir,'plots')
     os.makedirs(plot_dir, exist_ok=True)
@@ -218,10 +218,12 @@ def generate_bpm(obs_date, log, **kwargs):
     # diagnostic plot for bpm threshold value
     master_dark_arr = master_dark.flatten()
     zoom_master_dark_arr = master_dark_arr[master_dark_arr < 30]
+    bin_width = 0.8
+    custom_bins = np.arange(min(zoom_master_dark_arr), max(zoom_master_dark_arr) + bin_width, bin_width)
     bad_dark_perc = (len(master_dark[(master_dark > sigma_upper_dark) | (master_dark < sigma_lower_dark)]) / master_dark.size) * 100
     plt.figure(figsize=(8,5))
     plt.title(fr'master dark pixels, {bad_dark_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
-    plt.hist(zoom_master_dark_arr, bins=200, color='black', alpha=0.9)
+    plt.hist(zoom_master_dark_arr, bins=custom_bins, color='black', alpha=0.9)
     plt.axvline(median_dark, color='red', linestyle='dotted', label='median')
     plt.axvline(sigma_upper_dark, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
     plt.axvline(sigma_lower_dark, color='grey', linestyle='dotted')
@@ -251,10 +253,12 @@ def generate_bpm(obs_date, log, **kwargs):
 
     master_flat_arr = master_flat.flatten()
     zoom_master_flat_arr = master_flat_arr[master_flat_arr < 10**(4.5)]
+    bin_width = 500
+    custom_bins = np.arange(min(zoom_master_flat_arr), max(zoom_master_flat_arr) + bin_width, bin_width)
     bad_flat_perc = (len(master_flat[(master_flat > sigma_upper_flat) | (master_flat < sigma_lower_flat)]) / master_flat.size) * 100
     plt.figure(figsize=(8,5))
     plt.title(fr'master flat pixels {bad_flat_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
-    plt.hist(zoom_master_flat_arr, bins=100, color='black', alpha=0.9)
+    plt.hist(zoom_master_flat_arr, bins=custom_bins, color='black', alpha=0.9)
     plt.axvline(median_flat, color='red', linestyle='dotted', label='median')
     plt.axvline(sigma_upper_flat, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
     plt.axvline(sigma_lower_flat, color='grey', linestyle='dotted')
@@ -263,7 +267,7 @@ def generate_bpm(obs_date, log, **kwargs):
     plt.xlabel('counts / s', fontsize=14, labelpad=15)
     plt.ylabel('# of pixels', fontsize=14, labelpad=15)
     plt.legend(fontsize=13, loc='upper right')
-     # Set png file
+    # Set png file
     plot_dir = os.path.join(bpm_dir,'plots')
     os.makedirs(plot_dir, exist_ok=True)
     png_file = 'master_flat_threshold.png'
