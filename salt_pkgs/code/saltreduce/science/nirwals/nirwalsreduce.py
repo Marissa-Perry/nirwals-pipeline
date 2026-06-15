@@ -20,7 +20,7 @@ from scipy.signal import find_peaks
 from scipy.signal import savgol_filter
 # astropy imports
 from astropy.io import fits
-from astropy.stats import sigma_clip
+from astropy.stats import sigma_clip, mad_std
 # matplotlib imports
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as grid
@@ -1814,10 +1814,12 @@ def fit_spectral_channels(image, work, log, gpcnt_image=None):
 
     ####### DEBUG ######
     wav_grid = work['we']
-    wmin = 10250  # straddling a strong sky-line at ~10289 A
-    wmax = 10350  # ''
+    # wmin = 10250  # straddling a strong sky-line at ~10289 A
+    # wmax = 10350  # ''
+    wmin = 9780
+    wmax = 9820
 
-    # 30 evenly spaced spectral channel wavelengths
+    # evenly spaced spectral channel wavelengths
     sample_wavs = np.linspace(wmin, wmax, 10)
 
     # wavelengths to column indices
@@ -2163,7 +2165,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     rat_cs_1d[nz] = sci_cs_1d[nz] / sky_cs_1d[nz]        
     # Normalise object to sky continuum subtracted ratio array (1D)
     # rat_cs_1d /= rat_cs_1d.mean()     # renaming variables for plotting !!!!
-    rat_cs_1d_norm = rat_cs_1d / rat_cs_1d.mean()   # try median
+    rat_cs_1d_norm = rat_cs_1d / np.median(rat_cs_1d)  # try median
     # Repeat 1D object to sky ratio to same column dimension as 2D images
     # rat_cs_2d = np.repeat(rat_cs_1d, rat_sf_image.shape[1], axis=1)   # renaming variables for plotting !!!
     rat_cs_2d_norm = np.repeat(rat_cs_1d_norm, rat_sf_image.shape[1], axis=1)
@@ -2189,26 +2191,27 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # Scale sky continuum subtracted image
     # sky_scaled = sky_cs_image * rat_sf_image            # using renamed variable for plotting !!!!       
     sky_scaled = sky_cs_image * scaling_image_masked      # scaling the sky lines in the sky frame to the sky lines in the object frame
+    # Subtract scaled image from object continuum subtracted image
+    sci_image = sci_cs_image - sky_scaled
 
     sky_line_scaling_diagnostic_plot(
         work,
         sci_cs_image=sci_cs_image,
         sky_cs_image=sky_cs_image,
-        wav_dep_scaling_ratio_2d=rat_sf_image,
         fiber_dep_scaling_ratio_2d=rat_cs_2d_norm,
         sky_combined_scaling_factor_2d=scaling_image_masked,
-        gpm_image=gpm_image
+        sky_scaled=sky_scaled, 
+        sci_image=sci_image,
+        skyline_mask=gpm_image
         )
 
-    # Subtract scaled image from object continuum subtracted image
-    sci_image = sci_cs_image - sky_scaled
     # Add continuum back in
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image)
 
     skyline_residuals_plot(
         work,
         flattened_obj_cs_2d=sci_image,
-        gpm=gpm_image
+        skyline_mask=gpm_image
         )
 
     sky_line_flattening_diagnostic_plot(
@@ -2229,7 +2232,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
 
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def skyline_residuals_plot(work, flattened_obj_cs_2d, gpm):
+def skyline_residuals_plot(work, flattened_obj_cs_2d, skyline_mask):
 # ---------------------------------------------------------------------------- #
     '''
     plotting the summed residual intensity of all skylines for each fiber in the object frame after subtraction.
@@ -2237,7 +2240,7 @@ def skyline_residuals_plot(work, flattened_obj_cs_2d, gpm):
     '''
 
     # keep only skyline regions
-    masked = flattened_obj_cs_2d * gpm
+    masked = flattened_obj_cs_2d * skyline_mask
 
     n_fibres = masked.shape[0]
 
@@ -2247,7 +2250,7 @@ def skyline_residuals_plot(work, flattened_obj_cs_2d, gpm):
     for i in range(n_fibres):
         # sky sub intensity for i-th fiber
         #       for all skyline spectral regions 
-        vals = masked[i, gpm[i, :] > 0]
+        vals = masked[i, skyline_mask[i, :] > 0]
 
         mean_resid[i] = np.mean(vals)
         median_resid[i] = np.median(vals)
@@ -2349,7 +2352,7 @@ def sky_line_flattening_diagnostic_plot(work, unscaled_sky_cs_2d, unflattened_ob
     # choosing chunks fibers that will finely sample the bottom, middle, and top of the psuedo-slit
     # without plotting all of them
     # note that these numbers correspond to fiber position along psuedo slit, not the fiber IDs on the IFU
-    diagnostic_fibers = [10, 40, 45, 100, 145, 150, 155, 160] 
+    diagnostic_fibers = [0, 5, 15, 25, 39, 185, 198, 206, 207] 
     for fiber_num in diagnostic_fibers:
 
         # retrive spectra
@@ -2385,49 +2388,85 @@ def sky_line_flattening_diagnostic_plot(work, unscaled_sky_cs_2d, unflattened_ob
 
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def sky_line_scaling_diagnostic_plot(work, sci_cs_image, sky_cs_image, wav_dep_scaling_ratio_2d, fiber_dep_scaling_ratio_2d, sky_combined_scaling_factor_2d, gpm_image=None):
+def sky_line_scaling_diagnostic_plot(work, sci_cs_image, sky_cs_image, fiber_dep_scaling_ratio_2d, sky_combined_scaling_factor_2d, sky_scaled, sci_image, skyline_mask=None):
 # ---------------------------------------------------------------------------- #
     '''
-    plotting both scale factors that are applied to the sky cs frame before subtracting it from the object cs frame
-    
-    scale factors:
-        1. fiber-dependent factor --> 2D array of ratios of the summed skylines in object and sky cs frames for each fiber
-        2. wavelength/temporal-dependent factor --> 2D array of ratios of the object and sky sky-fit (skyline-masked) frames
+    For each diagnostic fiber, plots:
+        Row 1: sci_cs, sky_cs, and scaled_sky spectra at sky-line wavelengths
+                --> shows what is being subtracted and whether sky_scaled is too small/large
+        Row 2: combined scaling factor applied to sky frame
+                --> shows whether the scaling is anomalous for bright fibers
+        Row 3: cumulative flux budget: sci_cs - sky_scaled = sci_image
+                --> shows the net effect of sky subtraction on the flux
     '''
     # after rectification, all fibers share the same wavelength grid
     wav_grid = work['we']
+    offset = 10   #[A]
 
-    diagnostic_fibers = [10, 40, 45, 100, 145, 150, 155, 160]
+    diagnostic_fibers = [0, 7, 39, 188, 198, 206, 207, 208, 209]
     for fiber_num in diagnostic_fibers:
 
-        m = (gpm_image[fiber_num, :] == 1)  # all sky-line wavelengths
-        
-        # ------- print stats for fiber ---------
-        print("fiber", fiber_num)
-        print("used scale median:", np.nanmedian(sky_combined_scaling_factor_2d[fiber_num, m]))
-        print("used scale min/max:", np.nanmin(sky_combined_scaling_factor_2d[fiber_num, m]), np.nanmax(sky_combined_scaling_factor_2d[fiber_num, m]))
-        print("obj/sky direct median:", np.nanmedian(sci_cs_image[fiber_num, m] / sky_cs_image[fiber_num, m]))
-        # ----------------------------------------
-
-        wav_ratio = wav_dep_scaling_ratio_2d[fiber_num, m]
-        fib_ratio = fiber_dep_scaling_ratio_2d[fiber_num, m]
-        combined = sky_combined_scaling_factor_2d[fiber_num, m]
+        m = (skyline_mask[fiber_num, :] == 1)  # sky-line wavelength mask
         wav_grid_masked = wav_grid[m]
 
-        plt.figure(figsize=(9, 5))
+        # --- quantities at sky-line wavelengths ---
+        sci_cs_spec = sci_cs_image[fiber_num, m]
+        sky_cs_spec = sky_cs_image[fiber_num, m]
+        sky_scl_spec = sky_scaled[fiber_num, m]
+        sci_img_spec = sci_image[fiber_num, m]
+        combined = sky_combined_scaling_factor_2d[fiber_num, m]
+        fib_ratio = fiber_dep_scaling_ratio_2d[fiber_num, 0]   # scalar per fiber
 
-        plt.title(f"sky-line scaling factors, fiber idx {fiber_num}", fontsize=11)
+        # --- summed quantities (the flux budget) ---
+        sum_sci_cs = sci_cs_image[fiber_num, :].sum()
+        sum_sky_scl = sky_scaled[fiber_num, :].sum()
+        sum_sci_img = sci_image[fiber_num, :].sum()
 
-        plt.step(wav_grid_masked, wav_ratio, where='mid', color='blue', linewidth=1.2, alpha=0.3, label='obj/sky sky-fit factor')
-        plt.step(wav_grid_masked, fib_ratio, where='mid', color='blue', linewidth=1.2, alpha=0.8, label=f'obj/sky skyline-sum factor ({fib_ratio[0]:.3f})')
-        plt.step(wav_grid_masked, combined, where='mid', color='black', linewidth=0.6, alpha=0.95, label='combined scaling')
-        # highlight sky-lines
-        for w in wav_grid_masked:
-            plt.axvline(w, color='grey', linestyle='--', linewidth=0.6, alpha=0.1)
+        fig, axes = plt.subplots(4, 1, figsize=(10, 13), tight_layout=True)
+        fig.suptitle(f'sky-subtraction diagnostic — fiber #{fiber_num}', fontsize=14)
 
-        plt.xlabel('wavelength [A]', fontsize=12, labelpad=15)
-        plt.ylabel('scale factor', fontsize=12, labelpad=15)
-        plt.legend(fontsize=10)
+        # --- Row 1: spectra at sky-line wavelengths ---
+        ax = axes[0]
+        ax.step(wav_grid_masked, sci_cs_spec,  where='mid', color='black',  lw=1.2, label='obj cs')
+        ax.step(wav_grid_masked - offset*2, sky_cs_spec,  where='mid', color='orange', lw=1.2, alpha=0.7, label='sky cs')
+        ax.step(wav_grid_masked - offset, sky_scl_spec, where='mid', color='blue',   lw=1.2, alpha=0.7, label='sky scaled')
+        ax.axhline(0, color='grey', linestyle='--', linewidth=0.6, alpha=0.5)
+        ax.set_ylabel('counts / s', fontsize=11)
+        ax.set_title('spectra at sky-line wavelengths', fontsize=10)
+        ax.legend(fontsize=10)
+
+        # --- Row 2: combined scaling factor ---
+        ax = axes[1]
+        ax.step(wav_grid_masked, combined, where='mid', color='black', lw=0.8, label='wavelength * fiber scale factor')
+        ax.axhline(fib_ratio, color='grey', linestyle='--', linewidth=0.8, alpha=0.9, label='fiber scale factor')
+        ax.set_ylabel('scale factor', fontsize=11)
+        ax.set_title('scaling for sky frame: wavelength scaling (obj/sky skyfit) & fiber scaling (wavelength-avg obj/sky cs)', fontsize=10)
+        ax.legend(fontsize=10)
+
+        # --- Row 3: flux budget (summed over all wavelengths) ---
+        ax = axes[2]
+        labels = ['sci_cs\n(before sub)', 'sky_scaled\n(subtracted)', 'sci_image\n(after sub)']
+        values = [sum_sci_cs, sum_sky_scl, sum_sci_img]
+        colors = ['black', 'blue', 'red']
+        bars = ax.bar(labels, values, color=colors, alpha=0.7)
+        # annotate bar values
+        for bar, val in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                    f'{val:.0f}', ha='center', va='bottom', fontsize=9)
+        ax.axhline(0, color='grey', linestyle='--', linewidth=0.6)
+        ax.set_ylabel('summed flux (counts / s)', fontsize=11)
+        ax.set_title('flux budget: sci_cs - sky_scaled = sci_image', fontsize=10)
+
+        # --- Row 4: result of sky subtraction at sky-line wavelengths ---
+        ax = axes[3]
+        ax.step(wav_grid_masked, sci_cs_spec,  where='mid', color='black', lw=1.2, alpha=0.5, 
+                linestyle='--', label='obj cs (before sky-sub)')
+        ax.step(wav_grid_masked, sci_img_spec, where='mid', color='red',   lw=1.2, label='sci image (after sky-sub)')
+        ax.axhline(0, color='grey', linestyle='--', linewidth=0.6, alpha=0.5)
+        ax.set_xlabel('wavelength [Å]', fontsize=11)
+        ax.set_ylabel('counts / s', fontsize=11)
+        ax.set_title('sky subtraction result at sky-line wavelengths', fontsize=10)
+        ax.legend(fontsize=10)
 
         # Set png file
         plot_dir = os.path.join(work['output']['dir'],'plots')
