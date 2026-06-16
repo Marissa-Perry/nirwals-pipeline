@@ -2150,11 +2150,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # Clean sky continuum subtracted image
     sky_cs_2d = gpm_image * sky_cs_image        # interline regions set to 0, in sky cs image
     # Collapse object continuum subtracted image
-    sci_cs_1d = np.sum(sci_cs_2d, axis=1)       # summing up spectral axis across fibers: (n columns, 1)
+    # sci_cs_1d = np.sum(sci_cs_2d, axis=1)       # summing up spectral axis across fibers: (n columns, 1)
+    sci_cs_1d = np.median(sci_cs_2d, axis=1)    # just taking the median instead and skipping normalization step later !!!
     # Some numpy voodoo... set n rows, 1 column
     sci_cs_1d = np.array([sci_cs_1d]).transpose()  # transpose: (n rows, 1)
     # Collapse sky continuum subtracted image
-    sky_cs_1d = np.sum(sky_cs_2d, axis=1)        # ''
+    # sky_cs_1d = np.sum(sky_cs_2d, axis=1)        # ''
+    sky_cs_1d = np.median(sky_cs_2d, axis=1)
     # Some numpy voodoo... set n rows, 1 column
     sky_cs_1d = np.array([sky_cs_1d]).transpose()  # ''
     # Initialise object to sky continuum subtracted ratio array (1D)
@@ -2162,20 +2164,19 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # Set non-zero mask from sky continuum subtracted array
     nz = sky_cs_1d != 0.
     # Set object to sky continuum subtracted ratio array (1D)
-    rat_cs_1d[nz] = sci_cs_1d[nz] / sky_cs_1d[nz]        
+    rat_cs_1d[nz] = sci_cs_1d[nz] / sky_cs_1d[nz]
     # Normalise object to sky continuum subtracted ratio array (1D)
     # rat_cs_1d /= rat_cs_1d.mean()     # renaming variables for plotting !!!!
-    rat_cs_1d_norm = rat_cs_1d / np.median(rat_cs_1d)  # try median
+    # rat_cs_1d_norm = rat_cs_1d / np.median(rat_cs_1d)
+    rat_cs_1d_norm = rat_cs_1d
     # Repeat 1D object to sky ratio to same column dimension as 2D images
     # rat_cs_2d = np.repeat(rat_cs_1d, rat_sf_image.shape[1], axis=1)   # renaming variables for plotting !!!
     rat_cs_2d_norm = np.repeat(rat_cs_1d_norm, rat_sf_image.shape[1], axis=1)
 
     sky_line_sum_diagnostic_plot(
         work,
-        sky_spectral_sum_arr=sky_cs_1d, 
-        object_spectral_sum_arr=sci_cs_1d,
-        ratio_arr=rat_cs_1d,
-        norm_ratio_arr=rat_cs_1d_norm
+        sky_spectral_sum_arr=np.sum(sky_cs_2d, axis=1), 
+        object_spectral_sum_arr=np.sum(sci_cs_2d, axis=1)
         )
     
     # Combine normalised wavelength and position scalings
@@ -2267,7 +2268,7 @@ def skyline_residuals_plot(work, flattened_obj_cs_2d, skyline_mask):
     # Add output directory path to png file
     filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
-    plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
+    plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
     plt.close()
 
     return
@@ -2275,7 +2276,7 @@ def skyline_residuals_plot(work, flattened_obj_cs_2d, skyline_mask):
 
 # TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum_arr, ratio_arr, norm_ratio_arr):
+def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum_arr):
 # ---------------------------------------------------------------------------- #
     '''
     plotting the summed skylines vs. fiber # for both object and sky cs frames.
@@ -2290,7 +2291,7 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum
     plt.plot(fibre_idx, object_spectral_sum_arr, label='obj frame')
 
     plt.xlabel('fiber #', fontsize=12, labelpad=15)
-    plt.ylabel('summed sky lines', fontsize=12, labelpad=15)
+    plt.ylabel('summed skyline flux', fontsize=12, labelpad=15)
     plt.legend(fontsize=12)
 
     # Set png file
@@ -2300,27 +2301,7 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum
     # Add output directory path to png file
     filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
-    plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
-
-    # --------- figure of scale factor for each fiber ----------
-    plt.figure(figsize=(8,5))
-
-    # plt.title(title, fontsize=11)
-    plt.plot(fibre_idx, ratio_arr, color='grey', label='raw')
-    plt.plot(fibre_idx, norm_ratio_arr, color='blue', label='normalized')
-
-    plt.xlabel('fiber #', fontsize=12, labelpad=15)
-    plt.ylabel('obj-sky ratio', fontsize=12, labelpad=15)
-    plt.legend(fontsize=12)
-
-    # Set png file
-    plot_dir = os.path.join(work['output']['dir'],'plots')
-    os.makedirs(plot_dir, exist_ok=True)
-    png_file = '{0}_fiber_scaling_ratios.png'.format(work['file'])
-    # Add output directory path to png file
-    filepath = os.path.join(plot_dir, png_file)
-    # Save plot as png
-    plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
+    plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
     plt.close()
 
     return
@@ -2384,7 +2365,7 @@ def sky_line_scaling_diagnostic_plot(work, sci_cs_image, sky_cs_image, fiber_dep
         ax.scatter(wav_grid_masked, combined,  color='black', s=3, label='wavelength * fiber scale factor')
         ax.axhline(fib_ratio, color='grey', linestyle='--', linewidth=1.2, alpha=0.9, label=f'fiber scale factor ({fib_ratio:.2f})')
         ax.set_ylabel('scale factor', fontsize=11)
-        ax.set_title('scaling for sky frame: wavelength scaling (obj/sky skyfit) & fiber scaling (wavelength-avg obj/sky cs)', fontsize=10)
+        ax.set_title('scaling for sky frame: wavelength scaling (obj/sky skyfit for skylines) & fiber scaling (wavelength-avg obj/sky cs for skylines)', fontsize=10)
         ax.legend(fontsize=10)
 
         # --- Row 3: flux budget (summed over all wavelengths) ---
@@ -2392,7 +2373,7 @@ def sky_line_scaling_diagnostic_plot(work, sci_cs_image, sky_cs_image, fiber_dep
         labels = ['sci_cs\n(before sub)', 'sky_scaled\n(subtracted)', 'sci_image\n(after sub)']
         values = [sum_sci_cs, sum_sky_scl, sum_sci_img]
         colors = ['black', 'blue', 'red']
-        bars = ax.bar(labels, values, color=colors, alpha=0.7)
+        bars = ax.bar(labels, values, color=colors, alpha=0.5)
         # annotate bar values
         for bar, val in zip(bars, values):
             ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
