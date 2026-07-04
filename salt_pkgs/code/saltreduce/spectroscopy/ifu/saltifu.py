@@ -14,6 +14,10 @@ import numpy as np
 from scipy.signal import find_peaks
 from scipy.signal import savgol_filter
 
+# for plotting
+import matplotlib.pyplot as plt
+import os
+
 # Application imports
 # - saltreduce.functions
 from ...functions import Fit1D
@@ -292,45 +296,146 @@ def trace_fibres(traces, fibres, windows, work, log):
     return True, traces
 
 # ---------------------------------------------------------------------------- #
-def extract_fibres(image, traces, work, log):
+def extract_fibre_optimal(sci, gpm, flt_sub, gain, read_noise):
 # ---------------------------------------------------------------------------- #
+    '''
+    Horne 1986 optimal extraction method.
+    Default extraction option.
+    '''
+    # spatial profile P from flat image
+    flt_masked = flt_sub * gpm  
+    col_sums = flt_masked.sum(axis=0)
+    col_sums[col_sums == 0] = 1.0
+    P = flt_masked / col_sums   # normalised to sum to 1 per column
 
-    """
-    image: <numpy array> 2D image array
-    traces: <dictionary> fibre traces dictionary
-    work: <dictionary> work dictionary
+    sci_e = sci * gain               # [counts] --> [e-], science in electrons
+    V_e = read_noise**2 + np.abs(sci_e)  # variance in electrons
+    V_e[V_e <= 0] = 1.0                  # avoid division by zero
+    V_e[gpm == 0] = 1e30             # bad pixels get very high variance
 
-    return: <dictionary> extracted fibres dictionary
-    """
+    # Horne 1986 Eq. 8
+    num = np.sum(P * sci_e / V_e, axis=0)  # sum across rows
+    den = np.sum(P**2 / V_e, axis=0)       # ''
+    good = den > 0                         # avoid divide by zero
+    F_e = np.zeros_like(den, dtype=np.float32)
+    F_e[good] = num[good] / den[good]      # [e-]
+    F = F_e / gain                         # [e-] --> [counts] 
+    F[~np.isfinite(F)] = 0.0 
 
-    # Check tag for log message
-    if 'tag' in work and work['tag']:
-        # Set log message with tag
-        msg = ' - extract fibres: {0}'.format(work['tag'])
+    return F
 
-    else:
-        # Set log message without tag
-        msg = ' - extract fibres'
+# ---------------------------------------------------------------------------- #
+def extract_fibre_boxcar(sciarr, gpmarr, fltarr):
+# ---------------------------------------------------------------------------- #
+    '''
+    Boxcar extraction with flat-fielding and good-pixel renormalization.
+    Secondary extraction option.
+    '''
+    non_nan = ~np.isnan(sciarr)
 
+    # Check flat field image array
+    if fltarr is not None:
+        # Linearly transform intensity scale (bscale)
+        fltarr[non_nan] /= fltarr[non_nan].mean()
+        # Set combined non NaN science and non zero flat mask
+        mask = (non_nan) * (fltarr != 0)
+        # Flat field science image array
+        sciarr[mask] /= fltarr[mask]
+
+    # Renormalize by number of good pixels per wavelength bin
+    # Set combined non NaN science and non zero good pixel mask
+    mask = (non_nan) * (gpmarr != 0)
+    # Scale fibre flux for 'nr' of good pixels:
+    # - divide 'sci' by 'gpm'
+    sciarr[mask] /= gpmarr[mask]
+    # - multiply 'sci' by 'gpm' mean
+    sciarr[non_nan] *= gpmarr[non_nan].mean()
+
+    return sciarr
+
+# ---------------------------------------------------------------------------- #
+def extract_fibres(sci, sci_unmasked, gpm, flt, traces, gain, read_noise, work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    Extract all fibres from the 2D images using the configured method (optimal or boxcar).
+
+    work['extract_method']:
+      'optimal' : Horne 1986 inverse-variance weighted extraction (default).
+                  Uses per-fibre native-resolution science/gpm/flat regions.
+      'boxcar'  : sum within aperture with good-pixel renormalization.
+                  Uses per-fibre collapsed 1D arrays.
+
+    sci : 2D science image, gpm applied (boxcar, bad pixels contribute mean flux value to sum)
+    sci_unmasked : 2D science image, gpm NOT applied (optimal, bad-pixels are given high noise)
+    gpm : 2D good-pixel image (1=good, 0=bad)
+    flt  2D flat / continuum-fit image (gpm applied), or None
+    traces : fibre traces dictionary
+    gain : [e-]
+    read_noise : [e-]
+
+    Returns (fibres, good_pixels)
+    '''
+    # Set extraction method (default optimal)
+    method = work.get('extract_method', 'optimal')
+    flat_type = work['flat']['type'][work['exp_type']]
+    apply_flat_boxcar = flat_type in ['flat', 'fit']
+
+    # optimal extraction requires a flat field for the spatial profile
+    if method == 'optimal' and flt is None:
+
+        # arc observations should not be flat-fielded, use boxcar method without flat
+        if work['exp_type'] == 'arc':
+            method = 'boxcar'
+        else:
+            raise SALTError("Optimal extraction requires a flat field (flat.type must be 'flat' or 'fit').")
+
+
+    if method not in ('optimal', 'boxcar'):
+        raise SALTError("Unknown extract_method: '{0}' (expected 'optimal' or 'boxcar')".format(method))
+    
     # Add message to log
-    log.message(msg, with_header=False)
+    log.message(' - extract fibres: method = {0}'.format(method), with_header=False)
 
-    # Initialise extracted fibres dictionary
-    fibres = {}
+    # Initialise extracted fibres and good pixels dictionaries
+    fibres, good_pixels = {}, {}
 
     # Loop for fibre traces...
     for id, fibre in traces.items():
 
-        # Set fibre row range and 'valid' array
+        # Set fibre row range and oversampled 'valid' aperture mask
         r_min, r_max, valid = set_fibre(fibre, work)
 
-        # Extract fibre science array
-        sciarr = set_fibre_array(image, r_min, r_max, valid, work)
+        # Good-pixel count per wavelength bin (GPCNT source; both methods)
+        gpmarr = set_fibre_array(gpm, r_min, r_max, valid, work)
 
-        # Add fibre flux and gpm arrays to extracted fibres dictionary
-        fibres[id] = sciarr
+        # =========================== BOXCAR ===========================
+        if method == 'boxcar':
+            # Collapse science (gpm applied) over the oversampled aperture
+            sciarr = set_fibre_array(sci, r_min, r_max, valid, work)
 
-    return fibres
+            fltarr = None
+            if apply_flat_boxcar and flt is not None:
+                # Extract fibre flat field array
+                fltarr = set_fibre_array(flt, r_min, r_max, valid, work)
+
+            # Add fibre flux to extracted fibres dictionary
+            fibres[id] = extract_fibre_boxcar(sciarr, gpmarr, fltarr)
+
+        # =========================== OPTIMAL ==========================
+        elif method == 'optimal':
+            
+            # Extract fibres for all arrays
+            sci_2D = sci_unmasked[r_min:r_max, :].copy()
+            gpm_2D = gpm[r_min:r_max, :].copy()
+            flt_2D = flt[r_min:r_max, :].copy()
+        
+            # Add fibre flux to extracted fibres dictionary
+            fibres[id] = extract_fibre_optimal(sci_2D, gpm_2D, flt_2D, gain, read_noise)
+
+        # Store good-pixel count for this fibre
+        good_pixels[id] = gpmarr
+
+    return fibres, good_pixels
 
 # ---------------------------------------------------------------------------- #
 def set_fibre(fibre, work):

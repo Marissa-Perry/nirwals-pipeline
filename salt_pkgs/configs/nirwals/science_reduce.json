@@ -237,6 +237,19 @@
     "nr_of_sky_fibres": 36,
     "row_repeat": 100,
     "apply_gpm": 1,
+    "extract_method": "optimal",
+    "extract": {
+        "notes": [
+            "a. extract_method: 'optimal' | 'boxcar';",
+            "b. optimal: Horne 1986 inverse-variance weighted extraction using fiber profiles from flat exposure;",
+            "c. boxcar: sum within aperture with good-pixel renormalization;",
+            "d. read_noise_electrons: per-pixel read noise from up-the-ramp sampling, keyed by nearest EXPTIME"
+        ],
+        "read_noise_electrons": {
+            "30": 15.5, "60": 12.8, "90": 11.6, "120": 11.2, "167": 10.7, "600": 12.6
+        },
+        "read_noise_default": 12.6
+    },
 
     "w_mod": {"min": 0.0, "max": 0.0, "tol": 15.0}, "w_rms_tol": {"min": 0.0001, "max": 0.75}, "z_rms_tol": {"min": 0.0001, "max": 0.75},
 
