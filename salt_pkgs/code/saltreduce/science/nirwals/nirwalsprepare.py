@@ -152,8 +152,7 @@ def generate_bpm(obs_date, log, **kwargs):
 
     flat_files = []
     flat_data = []
-    dark_files = []
-    dark_data = []
+    dark_groups = {}  # grouped by exposure time
     flag_data = []
     for file in data_files:
         with fits.open(file) as hdul:
@@ -164,16 +163,15 @@ def generate_bpm(obs_date, log, **kwargs):
                 flat_data.append(hdul['SCI'].data)
 
             elif exp_type == "Dark":
-                dark_files.append(file)
-                dark_data.append(hdul['SCI'].data)
+                exptime = hdul['PRIMARY'].header['EXPTIME']
+                if exptime not in dark_groups:
+                    dark_groups[exptime] = []
+                dark_groups[exptime].append(hdul['SCI'].data)
 
             flag_data.append(hdul['FLAGS'].data)  # pixels flagged during Ralph's image reduction script (up-the-ramp sampling)
 
-    # average the darks
-    dark_data = np.array(dark_data)
-    if len(dark_data) == 0:
-        raise RuntimeError(f'No dark files found for {obs_date}')
-    master_dark = np.median(dark_data, axis=0)  
+    if len(dark_groups) == 0:
+        raise RuntimeError(f'No dark files found for {obs_date}') 
 
     # average the flats
     flat_data = np.array(flat_data)
@@ -182,7 +180,7 @@ def generate_bpm(obs_date, log, **kwargs):
     master_flat = np.median(flat_data, axis=0)  
 
     # initialise a BPM 
-    bpm = np.zeros(master_dark.shape, dtype=np.float32)
+    bpm = np.zeros(master_flat.shape, dtype=np.float32)
 
     # ----------- BPM generated from flags -----------
     # set good = 0, bad = 1 based on flagged pixels during up-the-ramp sampling in Ralph's image reduction script
@@ -207,13 +205,24 @@ def generate_bpm(obs_date, log, **kwargs):
     plt.close()
     # --------------------------------------------------
     # --------- BPM generated from master dark ---------
-    median_dark = np.median(master_dark)
-    sigma_dark = mad_std(master_dark)  # sigma of a non-Gaussian distribution
-    # compute the threshold values [counts/s]
-    sigma_upper_dark = median_dark + bpm_thresh_sigma * sigma_dark  
-    sigma_lower_dark = median_dark - bpm_thresh_sigma * sigma_dark
-    # set good = 0, bad = 1 based on sigma threshold
-    bpm[(master_dark > sigma_upper_dark) | (master_dark < sigma_lower_dark)] = 1.
+    # build a master dark for each exposure time, threshold each one, and flag a pixel if it is bad in any exposure-time group.
+    bpm_dark = np.zeros(bpm.shape, dtype=bool)
+    for exptime, stack in dark_groups.items():
+        master_dark_exptime = np.median(np.array(stack), axis=0)   # master dark for given exptime
+        median_dark = np.median(master_dark_exptime)
+        sigma_dark = mad_std(master_dark_exptime)
+        sigma_upper_dark = median_dark + bpm_thresh_sigma * sigma_dark
+        sigma_lower_dark = median_dark - bpm_thresh_sigma * sigma_dark
+        flagged = (master_dark_exptime > sigma_upper_dark) | (master_dark_exptime < sigma_lower_dark)
+        bpm_dark |= flagged
+        log.message('   - dark BPM: exptime={0}s, {1:.1f}% flagged'.format(
+            exptime, 100 * flagged.mean()), with_header=False)
+
+    bpm[bpm_dark] = 1.
+
+    # representative master dark for the diagnostic plot (longest exposure)
+    longest_exptime = max(dark_groups.keys())
+    master_dark = np.median(np.array(dark_groups[longest_exptime]), axis=0)
 
     # diagnostic plot for bpm threshold value
     master_dark_arr = master_dark.flatten()
@@ -222,7 +231,7 @@ def generate_bpm(obs_date, log, **kwargs):
     custom_bins = np.arange(min(zoom_master_dark_arr), max(zoom_master_dark_arr) + bin_width, bin_width)
     bad_dark_perc = (len(master_dark[(master_dark > sigma_upper_dark) | (master_dark < sigma_lower_dark)]) / master_dark.size) * 100
     plt.figure(figsize=(8,5))
-    plt.title(fr'master dark pixels, {bad_dark_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
+    plt.title(fr'pixels for {longest_exptime:.1f} exp master dark, {bad_dark_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
     plt.hist(zoom_master_dark_arr, bins=custom_bins, color='black', alpha=0.9)
     plt.axvline(median_dark, color='red', linestyle='dotted', label='median')
     plt.axvline(sigma_upper_dark, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
