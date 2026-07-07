@@ -30,8 +30,13 @@
     },
 
     "bpm": {
+        "generate": true,
+        "notes": [
+            "a. If true, will generate BPM from master flat, master darks, and pixels flagged during up-the-ramp sampling."
+
+        ],
         "threshold": {
-            "sigma": 10.0
+            "sigma": 5.0
         }
     },
 
