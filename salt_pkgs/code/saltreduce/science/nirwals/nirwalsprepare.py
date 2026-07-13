@@ -161,7 +161,10 @@ def generate_bpm(obs_date, log, **kwargs):
 
             with fits.open(bpm_file) as hdul:
                 bpm = hdul['BPM'].data  # save pre-generated BPM data 
-                comment = str(hdul['BPM'].header['COMMENT'])  # save comment from header to use in new fits
+                comment = ' '.join(str(hdul['BPM'].header['COMMENT']).split())  # save comment from header to use in new fits
+            # compute the percentage of bad pixels in this BPM
+            bad = len(bpm[bpm == 1])
+            perc_bad = (bad / bpm.size) * 100
 
         except Exception as e:
             log.message(f"No BPM found in product directory: {os.path.join(prd_dir, '*Bpm*.fits')}. \nAdd one or set config to generate one.", with_header=False)
@@ -307,14 +310,14 @@ def generate_bpm(obs_date, log, **kwargs):
         plt.close()
         # ---------------------------------------------------
 
-    # compute the percentage of bad pixels in this BPM
-    bad = len(bpm[bpm == 1])
-    perc_bad = (bad / bpm.size) * 100
-    comment = f'Bad-pixel mask generated from median dark frame of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels.'
+        # compute the percentage of bad pixels in this BPM
+        bad = len(bpm[bpm == 1])
+        perc_bad = (bad / bpm.size) * 100
+        comment = f'Bad-pixel mask generated from median dark frame of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels.'
 
     # diagnostic plot for bpm image
     plt.figure(figsize=(10,5))
-    plt.title(fr'{perc_bad:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=12, pad=15)
+    plt.title(fr'{perc_bad:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$, BPM generated: {generate}', fontsize=12, pad=15)
     plt.imshow(bpm, origin='lower', cmap='Greys_r', vmin=0, vmax=1) 
     # Set png file
     plot_dir = os.path.join(bpm_dir,'plots')
