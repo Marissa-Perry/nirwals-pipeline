@@ -156,7 +156,7 @@ def generate_bpm(obs_date, log, **kwargs):
         log.message('   - config set to skip BPM generation.')
 
         try:
-            bpm_file = glob.glob(os.path.join(prd_dir, '*Bpm*.fits'))[0]
+            bpm_file = glob.glob(os.path.join(prd_dir, f'*Bpm*{bpm_thresh_sigma}sigma.fits'))[0]
             log.message('   - using file {0}'.format(bpm_file), with_header=False)
 
             with fits.open(bpm_file) as hdul:
