@@ -24,10 +24,6 @@
         "point_tolerance": 1.5,
         "min_points_pc": 50.0
     },
-    
-    "dark": {
-        "subtract": true
-    },
 
     "bpm": {
         "generate": true,
