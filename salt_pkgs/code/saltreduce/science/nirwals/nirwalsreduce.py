@@ -561,43 +561,38 @@ def set_other_work_variables(hdu, traces, work):
 
     return
 
-# DEBUGGING
 # ---------------------------------------------------------------------------- #
-def set_dark_file(hdu, work):
-    '''
-    find master dark frame with the same exposure time as current image using HDU
-    '''
+def set_dark_file(hdulist, prd_dir, prefix, obs_date, subtract=True):
 # ---------------------------------------------------------------------------- #
+    """
+    Find master dark frame with the same exposure time as current image.
+    """
 
     # check if dark subtraction
-    dark_cfg = work.get('dark', {})
-    if not dark_cfg or not dark_cfg.get('subtract', False):
+    if not subtract:
         return None
 
     # get exposure time of current frame
-    exp_time = hdu[PRIMARY].header['EXPTIME']
-    # set raw prefix and observation date
-    raw_prefix, obs_date = work['raw_prefix'], work['obs_date']
+    exp_time = hdulist[PRIMARY].header['EXPTIME']
     # Set wildcard for master dark file(s)
-    wildcard = '{0}{1}Dark*.fits'.format(raw_prefix, obs_date)
+    wildcard = '{0}{1}Dark*.fits'.format(prefix, obs_date)
     # Add product data directory to wildcard
-    wildcard = os.path.join(work['prd_dir'], wildcard)
+    wildcard = os.path.join(prd_dir, wildcard)
     # Get master dark file(s)
     dark_files = sorted(glob.glob(wildcard))
 
     if not dark_files:
         raise FileNotFoundError('No master dark files found with wildcard: {0}'.format(wildcard))
 
-    for dark_file in dark_files:
+    # get exposure time of dark frame and match by exposure time
+    matches = [f for f in dark_files if fits.getheader(f, PRIMARY)['EXPTIME'] == exp_time]
 
-        with fits.open(dark_file, mode='readonly') as dark_hdu:
-
-            # match by exposure time
-            dark_exp_time = dark_hdu[PRIMARY].header['EXPTIME']
-            if dark_exp_time == exp_time:
-                return dark_file
-
-    raise ValueError('No matching master dark found for EXPTIME={0} using wildcard {1}'.format(exp_time, wildcard))
+    if len(matches) == 0:
+        raise ValueError('No matching master dark found for EXPTIME={0} using wildcard {1}'.format(exp_time, wildcard))
+    if len(matches) > 1:
+        raise ValueError(f'Found multiple master darks for EXPTIME={exp_time}: {[os.path.basename(m) for m in matches]}')
+    
+    return matches[0]
 
 # ---------------------------------------------------------------------------- #
 def set_read_noise(hdu, work):
@@ -641,20 +636,20 @@ def extract_fibres_from_image(hdu, traces, work, log):
 
     ######## DARK SUBTRACTION ##########
     # find master dark frame with the same exposure time as current image (HDU)
-    dark_file = set_dark_file(hdu, work)  
+    dark_file = set_dark_file(hdu, work['prd_dir'], work['raw_prefix'], work['obs_date'], subtract=work.get('dark', {}).get('subtract', False))
     
+    # dark subtract
     if dark_file is not None:
         
         # read and save master dark frame
         with fits.open(dark_file, mode='readonly') as dark_hdu:
             dark = dark_hdu[SCI].data.copy()
+        dark = np.where(np.isfinite(dark), dark, 0.0)  # set any infinite values to zero
 
         # dark subtract this frame
         sci = sci_raw - dark
-
-        # debug
-        dark_sub_diagnostic_plot(work, sci_raw=sci_raw, sci_dark_sub=sci)
-
+    
+    # skip dark subtraction
     else:
         sci = sci_raw.copy()
     ############################################
@@ -669,7 +664,7 @@ def extract_fibres_from_image(hdu, traces, work, log):
     sci *= gpm
 
     # save extraction method and what type of flat fielding to apply
-    method = work.get('extract_method', 'optimal')
+    method = work.get('extract_method', 'optimal')  # default to optimal if not set
     flat_type = work['flat']['type'][work['exp_type']]
 
     # Initialise flat field / continuum fit image as None
@@ -708,50 +703,6 @@ def extract_fibres_from_image(hdu, traces, work, log):
         dump_extracted_fibres(fibres, work)
 
     return fibres
-
-# TEST DIAGNOSTIC PLOT
-# ---------------------------------------------------------------------------- #
-def dark_sub_diagnostic_plot(work, sci_raw, sci_dark_sub):
-# ---------------------------------------------------------------------------- #
-    '''
-    plotting the science image before and after dark subtraction
-    '''
-
-    # difference between raw and dark subtracted image
-    difference = sci_raw - sci_dark_sub
-    # save scaling values derived from raw image (make sure saturated pixels don't dominate)
-    vmin_raw, vmax_raw = np.nanpercentile(sci_raw, [1,99.5])
-    vmin_sub, vmax_sub = np.nanpercentile(sci_dark_sub, [1,99.5])
-    vmin_dif, vmax_dif = np.nanpercentile(difference, [1,99.5])
-
-    fig, axes = plt.subplots(3, 1, figsize=(16, 12), tight_layout=True)
-
-    im0 = axes[0].imshow(sci_raw, origin='lower', aspect='auto', cmap='gray', vmin=vmin_raw, vmax=vmax_raw)
-    axes[0].set_title('raw image')
-    axes[0].set_ylabel('detector row')
-    plt.colorbar(im0, ax=axes[0], label='flux')
-
-    im1 = axes[1].imshow(sci_dark_sub, origin='lower', aspect='auto', cmap='gray', vmin=vmin_sub, vmax=vmax_sub)
-    axes[1].set_title('dark-subtracted image')
-    axes[1].set_ylabel('detector row')
-    plt.colorbar(im1, ax=axes[1], label='flux')
-
-    im1 = axes[2].imshow(difference, origin='lower', aspect='auto', cmap='gray', vmin=vmin_dif, vmax=vmax_dif)
-    axes[2].set_title('difference')
-    axes[2].set_ylabel('detector row')
-    plt.colorbar(im1, ax=axes[2], label='flux')
-    
-    # Set png file
-    plot_dir = os.path.join(work['output']['dir'],'plots')
-    os.makedirs(plot_dir, exist_ok=True)
-    png_file = '{0}_dark_sub.png'.format(work['file'])
-    # Add output directory path to png file
-    filepath = os.path.join(plot_dir, png_file)
-    # Save plot as png
-    plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
-    plt.close()
-
-    return
 
 
 # ---------------------------------------------------------------------------- #
