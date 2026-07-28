@@ -169,48 +169,50 @@ def generate_bpm(obs_date, log, **kwargs):
         except Exception as e:
             log.message(f"No BPM found in product directory: {os.path.join(prd_dir, '*Bpm*.fits')}. \nAdd one or set config to generate one.", with_header=False)
             return None
-        
-    # generate BPM using flats, darks, and flagged pixels
+    
     else:
 
-        flat_files = []
-        flat_data = []
-        dark_groups = {}  # grouped by exposure time
-        flag_data = []
+        log.message('   - generating BPM.')
+
+        # instrument (raw) file prefix — needed to locate master dark/flat files
+        prefix = kwargs['params']['raw_prefix']
+
+        # ---------- FLAGS union: from every individual reduced exposure ----------
+        # per-exposure ramp-fit flags live only on the individual frames, so read
+        # them here to preserve "flagged in ANY exposure that night"
+        flag_union = None
         for file in data_files:
             with fits.open(file) as hdul:
-                exp_type = hdul['PRIMARY'].header['EXPTYPE']
+                flags = hdul['FLAGS'].data
+                if flag_union is None:
+                    flag_union = np.zeros_like(flags)
+                flag_union[flags == 1] = 1
+        if flag_union is None:
+            raise RuntimeError(f'No reduced files found for {obs_date}')
 
-                if exp_type == "Flat field":
-                    flat_files.append(file)
-                    flat_data.append(hdul['SCI'].data)
+        # ---------- locate combined masters ----------
+        dark_wildcard = os.path.join(prd_dir, '{0}{1}Dark*.fits'.format(prefix, obs_date))
+        dark_files = sorted(glob.glob(dark_wildcard))
+        if len(dark_files) == 0:
+            raise RuntimeError(f'No combined dark files found for {obs_date}')
 
-                elif exp_type == "Dark":
-                    exptime = hdul['PRIMARY'].header['EXPTIME']
-                    if exptime not in dark_groups:
-                        dark_groups[exptime] = []
-                    dark_groups[exptime].append(hdul['SCI'].data)
+        flat_wildcard = os.path.join(prd_dir, '{0}{1}Flat*.fits'.format(prefix, obs_date))
+        flat_files = sorted(glob.glob(flat_wildcard))
+        if len(flat_files) == 0:
+            raise RuntimeError(f'No combined flat files found for {obs_date}')
 
-                flag_data.append(hdul['FLAGS'].data)  # pixels flagged during Ralph's image reduction script (up-the-ramp sampling)
+        # ---------- dark-subtract each master flat in memory ----------  # (dark sub for BPM generation but not fiber tracing)
+        flat_stack = []
+        for flat_file in flat_files:
+            # prevents a second subtraction
+            with fits.open(flat_file) as hdulist:
+                flat_stack.append(hdulist[SCI].data.copy())
+        master_flat = np.median(np.array(flat_stack), axis=0)
 
-        if len(dark_groups) == 0:
-            raise RuntimeError(f'No dark files found for {obs_date}') 
-
-        # average the flats
-        flat_data = np.array(flat_data)
-        if len(flat_data) == 0:
-            raise RuntimeError(f'No flat field files found for {obs_date}')
-        master_flat = np.median(flat_data, axis=0)  
-
-        # initialise a BPM 
+        # initialise BPM
         bpm = np.zeros(master_flat.shape, dtype=np.float32)
 
-        # ----------- BPM generated from flags -----------
-        # set good = 0, bad = 1 based on flagged pixels during up-the-ramp sampling in Ralph's image reduction script
-        # ensures any pixel flagged in any exposure for that night gets included in the BPM
-        flag_union = np.zeros_like(flag_data[0])
-        for flags in flag_data:
-            flag_union[flags == 1] = 1
+        # ---------- component 1: up-the-ramp-fit flags ----------
         bpm[flag_union == 1] = 1.
         bad_flag_perc = (flag_union.sum() / flag_union.size) * 100
 
@@ -224,96 +226,99 @@ def generate_bpm(obs_date, log, **kwargs):
         # Add bpm directory path to png file
         filepath = os.path.join(plot_dir, png_file)
         # Save plot as png
-        plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
+        plt.savefig(filepath, dpi=150, format='png', bbox_inches="tight")
         plt.close()
-        # --------------------------------------------------
-        # --------- BPM generated from master dark ---------
-        # build a master dark for each exposure time, threshold each one, and flag a pixel if it is bad in any exposure-time group.
+
+        # ---------- component 2: master darks (upper threshold) ----------
         bpm_dark = np.zeros(bpm.shape, dtype=bool)
-        for exptime, stack in dark_groups.items():
-            master_dark_exptime = np.median(np.array(stack), axis=0)   # master dark for given exptime
-            median_dark = np.median(master_dark_exptime)
-            sigma_dark = mad_std(master_dark_exptime)
-            sigma_upper_dark = median_dark + bpm_thresh_sigma * sigma_dark
-            sigma_lower_dark = median_dark - bpm_thresh_sigma * sigma_dark
-            flagged = (master_dark_exptime > sigma_upper_dark) | (master_dark_exptime < sigma_lower_dark)
+        plot_dark = None   # arrays kept for the longest-exposure diagnostic only
+
+        for dark_file in dark_files:
+            with fits.open(dark_file) as hdul:
+                exptime = hdul[PRIMARY].header['EXPTIME']
+                d = hdul[SCI].data
+            finite = np.isfinite(d)
+
+            med = np.median(d[finite])
+            p84 = np.percentile(d[finite], 84)   # median + 1 sigma
+            sig = p84 - med
+            upper = med + bpm_thresh_sigma * sig
+
+            flagged = finite & (d > upper)
             bpm_dark |= flagged
-            log.message('   - dark BPM: exptime={0}s, {1:.1f}% flagged'.format(
-                exptime, 100 * flagged.mean()), with_header=False)
+
+            bad_dark_perc = 100 * flagged.sum() / finite.sum()
+            log.message('   - dark BPM: exptime={0}s, {1:.1f}% flagged'.format(exptime, bad_dark_perc), with_header=False)
+
+            # retain only the longest exposure (the most stressing case) for plotting
+            if plot_dark is None or exptime > plot_dark['exptime']:
+                plot_dark = dict(exptime=exptime, data=d[finite], med=med, upper=upper, perc=bad_dark_perc)
 
         bpm[bpm_dark] = 1.
 
-        # representative master dark for the diagnostic plot (longest exposure)
-        longest_exptime = max(dark_groups.keys())
-        master_dark = np.median(np.array(dark_groups[longest_exptime]), axis=0)
+        # ---------- diagnostic: longest-exposure master dark only ----------
+        if plot_dark is not None:
+            zoom = plot_dark['data'][plot_dark['data'] < 30]
+            if zoom.size:
+                bin_width = 0.8
+                custom_bins = np.arange(zoom.min(), zoom.max() + bin_width, bin_width)
+                plt.figure(figsize=(8, 5))
+                plt.title(fr"{plot_dark['exptime']:.1f}s master dark, {plot_dark['perc']:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$", fontsize=13, pad=15)
+                plt.hist(zoom, bins=custom_bins, color='black', alpha=0.9)
+                plt.axvline(plot_dark['med'], color='red', linestyle='dotted', label='median')
+                plt.axvline(plot_dark['upper'], color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ upper threshold')
+                plt.yscale('log')
+                plt.xlim(-10, 30)
+                plt.xlabel('counts / s', fontsize=14, labelpad=15)
+                plt.ylabel('# of pixels', fontsize=14, labelpad=15)
+                plt.legend(fontsize=13, loc='upper right')
+                plot_dir = os.path.join(bpm_dir, 'plots')
+                os.makedirs(plot_dir, exist_ok=True)
+                filepath = os.path.join(plot_dir, f"master_dark_threshold_exptime{plot_dark['exptime']:.1f}.png")
+                plt.savefig(filepath, dpi=150, format='png', bbox_inches='tight')
+                plt.close()
 
-        # diagnostic plot for bpm threshold value
-        master_dark_arr = master_dark.flatten()
-        zoom_master_dark_arr = master_dark_arr[master_dark_arr < 30]
-        bin_width = 0.8
-        custom_bins = np.arange(min(zoom_master_dark_arr), max(zoom_master_dark_arr) + bin_width, bin_width)
-        bad_dark_perc = (len(master_dark[(master_dark > sigma_upper_dark) | (master_dark < sigma_lower_dark)]) / master_dark.size) * 100
-        plt.figure(figsize=(8,5))
-        plt.title(fr'pixels for {longest_exptime:.1f} exp master dark, {bad_dark_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
-        plt.hist(zoom_master_dark_arr, bins=custom_bins, color='black', alpha=0.9)
-        plt.axvline(median_dark, color='red', linestyle='dotted', label='median')
-        plt.axvline(sigma_upper_dark, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
-        plt.axvline(sigma_lower_dark, color='grey', linestyle='dotted')
-        plt.yscale('log') 
-        plt.xlim(-10,30)
-        plt.xlabel('counts / s', fontsize=14, labelpad=15)
-        plt.ylabel('# of pixels', fontsize=14, labelpad=15)
-        plt.legend(fontsize=13, loc='upper right')
-        # Set png file
-        plot_dir = os.path.join(bpm_dir,'plots')
-        os.makedirs(plot_dir, exist_ok=True)
-        png_file = 'master_dark_threshold.png'
-        # Add bpm directory path to png file
-        filepath = os.path.join(plot_dir, png_file)
-        # Save plot as png
-        plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
-        plt.close()
-        # ---------------------------------------------------
-        # --------- BPM generated from master flat ----------
-        median_flat = np.median(master_flat)
-        sigma_flat = mad_std(master_flat)  # sigma of a non-Gaussian distribution
-        # compute the threshold values [counts/s]
-        sigma_upper_flat = median_flat + bpm_thresh_sigma * sigma_flat  
-        sigma_lower_flat = median_flat - bpm_thresh_sigma * sigma_flat
-        # set good = 0, bad = 1 based on sigma threshold
-        bpm[(master_flat > sigma_upper_flat) | (master_flat < sigma_lower_flat)] = 1.
+        # ---------- component 3: master flat (two-sided threshold) ----------
+        finite_flat = np.isfinite(master_flat)
+        fvals = master_flat[finite_flat]
 
-        master_flat_arr = master_flat.flatten()
-        zoom_master_flat_arr = master_flat_arr[master_flat_arr < 10**(4.5)]
-        bin_width = 500
-        custom_bins = np.arange(min(zoom_master_flat_arr), max(zoom_master_flat_arr) + bin_width, bin_width)
-        bad_flat_perc = (len(master_flat[(master_flat > sigma_upper_flat) | (master_flat < sigma_lower_flat)]) / master_flat.size) * 100
-        plt.figure(figsize=(8,5))
-        plt.title(fr'master flat pixels {bad_flat_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
-        plt.hist(zoom_master_flat_arr, bins=custom_bins, color='black', alpha=0.9)
-        plt.axvline(median_flat, color='red', linestyle='dotted', label='median')
-        plt.axvline(sigma_upper_flat, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
-        plt.axvline(sigma_lower_flat, color='grey', linestyle='dotted')
-        plt.yscale('log') 
-        plt.xlim(-10**(4.5),10**(4.5))
-        plt.xlabel('counts / s', fontsize=14, labelpad=15)
-        plt.ylabel('# of pixels', fontsize=14, labelpad=15)
-        plt.legend(fontsize=13, loc='upper right')
-        # Set png file
-        plot_dir = os.path.join(bpm_dir,'plots')
-        os.makedirs(plot_dir, exist_ok=True)
-        png_file = 'master_flat_threshold.png'
-        # Add bpm directory path to png file
-        filepath = os.path.join(plot_dir, png_file)
-        # Save plot as png
-        plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
-        plt.close()
-        # ---------------------------------------------------
+        median_flat = np.median(fvals)
+        p16, p84 = np.percentile(fvals, [16, 84])
+        sig_lower_flat = median_flat - p16
+        sig_upper_flat = p84 - median_flat
 
-        # compute the percentage of bad pixels in this BPM
+        lower_flat = median_flat - bpm_thresh_sigma * sig_lower_flat
+        upper_flat = median_flat + bpm_thresh_sigma * sig_upper_flat
+
+        flat_bad = finite_flat & ((master_flat < lower_flat) | (master_flat > upper_flat))
+        bpm[flat_bad] = 1.
+        bad_flat_perc = 100 * flat_bad.sum() / finite_flat.sum()
+
+        # ---------- diagnostic ----------
+        zoom = fvals[fvals < 10**4.5]
+        if zoom.size:
+            bin_width = 500
+            custom_bins = np.arange(zoom.min(), zoom.max() + bin_width, bin_width)
+            plt.figure(figsize=(8, 5))
+            plt.title(fr'master flat, {bad_flat_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
+            plt.hist(zoom, bins=custom_bins, color='black', alpha=0.9)
+            plt.axvline(median_flat, color='red', linestyle='dotted', label='median')
+            plt.axvline(upper_flat, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
+            plt.axvline(lower_flat, color='grey', linestyle='dotted')
+            plt.yscale('log')
+            plt.xlim(-10**4.5, 10**4.5)
+            plt.xlabel('counts / s', fontsize=14, labelpad=15)
+            plt.ylabel('# of pixels', fontsize=14, labelpad=15)
+            plt.legend(fontsize=13, loc='upper right')
+            plot_dir = os.path.join(bpm_dir, 'plots')
+            os.makedirs(plot_dir, exist_ok=True)
+            filepath = os.path.join(plot_dir, 'master_flat_threshold.png')
+            plt.savefig(filepath, dpi=150, format='png', bbox_inches='tight')
+            plt.close()
+        # ---------- bad-pixel percentage + header comment ----------
         bad = len(bpm[bpm == 1])
         perc_bad = (bad / bpm.size) * 100
-        comment = f'Bad-pixel mask generated from median dark frame of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels.'
+        comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels.')
 
     # diagnostic plot for bpm image
     plt.figure(figsize=(10,5))
@@ -375,68 +380,6 @@ def generate_bpm(obs_date, log, **kwargs):
     return
 
 
-# ---------------------------------------------------------------------------- #
-def set_dark_file(hdulist, prd_dir, prefix, obs_date, subtract=True):
-# ---------------------------------------------------------------------------- #
-    """
-    Find master dark frame with the same exposure time as current image.
-    """
-
-    # check if dark subtraction
-    if not subtract:
-        return None
-
-    # get exposure time of current frame
-    exp_time = hdulist[PRIMARY].header['EXPTIME']
-    # Set wildcard for master dark file(s)
-    wildcard = '{0}{1}Dark*.fits'.format(prefix, obs_date)
-    # Add product data directory to wildcard
-    wildcard = os.path.join(prd_dir, wildcard)
-    # Get master dark file(s)
-    dark_files = sorted(glob.glob(wildcard))
-
-    if not dark_files:
-        raise FileNotFoundError('No master dark files found with wildcard: {0}'.format(wildcard))
-
-    for dark_file in dark_files:
-        with fits.open(dark_file, mode='readonly') as dark_hdu:
-            # get exposure time of dark frame
-            dark_exp_time = dark_hdu[PRIMARY].header['EXPTIME']
-            # match by exposure time
-            if dark_exp_time == exp_time:
-                return dark_file
-
-    raise ValueError('No matching master dark found for EXPTIME={0} using wildcard {1}'.format(exp_time, wildcard))
-
-
-# ---------------------------------------------------------------------------- #
-def dark_subtract_flat(hdulist, dark_file, log=None):
-# ---------------------------------------------------------------------------- #
-    """
-    Subtract master dark from the master flat
-    """
-
-    # ensure we don't subtract twice
-    if hdulist[PRIMARY].header.get('DARKSUB', False):
-        log.message(' - already dark subtracted', with_header=False)
-        # 'Beautify' log
-        log.message('', with_header=False)
-        return
-
-    with fits.open(dark_file, mode='readonly') as dark_hdu:
-        dark = dark_hdu[SCI].data.copy()
-
-    image = hdulist[SCI].data.copy()
-
-    hdulist[SCI].data = image - dark
-
-    hdulist[PRIMARY].header['DARKSUB'] = (True, 'Master dark subtracted')
-    hdulist[PRIMARY].header['DARKFILE'] = (os.path.basename(dark_file),'Master dark file')
-
-    log.message(' - subtract dark: {0}'.format(os.path.basename(dark_file)), with_header=False)
-    # 'Beautify' log
-    log.message('', with_header=False)
-    return
 
 # ---------------------------------------------------------------------------- #
 def prepare_flat_fit(obs_date, log, **kwargs):
@@ -482,16 +425,8 @@ def prepare_flat_fit(obs_date, log, **kwargs):
 
         # Open flat field file
         with fits.open(flat_file, mode='append') as hdulist:
-        
-            ########### dark subtraction of master flat #########
-            # check if dark subtraction set in config
-            dark_cfg = config.get('dark', {})
-            dark_subtract = dark_cfg.get('subtract', False)
 
-            dark_file = set_dark_file(hdulist, prd_dir, prefix, obs_date, subtract=dark_subtract)
-            if dark_file is None:
-                dark_subtract_flat(hdulist, dark_file, log)
-            #####################################################
+            # using raw master flat, not dark subtracted, for fiber tracing
 
             # Check if FITEXT already exists
             if 'FITEXT' in hdulist[SCI].header:
