@@ -304,9 +304,9 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight):
     '''
     # spatial profile P from flat image
     flt_ap = flt * aperture_weight  # down-weight the flat ion the edge rows by how much of each row is really in the fiber
-    col_sums = flt_ap.sum(axis=0)   # sum across fibers
-    col_sums[col_sums == 0] = 1.0
-    P = flt_ap / col_sums   # normalised to sum to 1 per column
+    flt_col_sums = flt_ap.sum(axis=0)   # sum across fibers
+    flt_col_sums[flt_col_sums == 0] = 1.0
+    P = flt_ap / flt_col_sums   # normalised to sum to 1 per column
 
     sci_e = sci * gain               # [counts] --> [e-], science in electrons
     V_e = read_noise**2 + np.abs(sci_e)  # variance in electrons
@@ -321,8 +321,15 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight):
     F_e = np.zeros_like(den, dtype=np.float32)
     F_e[good] = num[good] / den[good]      # [e-]
     F = F_e / gain                         # [e-] --> [counts] 
-    F[~np.isfinite(F)] = 0.0
 
+    # flat-field  using mean-normalised flat spectrum (same as boxcar extraction method)
+    flt_col_sums = flt_ap.sum(axis=0)    # sum across fibers
+    flt_mean = np.nanmean(flt_col_sums[flt_col_sums != 0])
+    flt_mean_norm = flt_col_sums / flt_mean
+    good = flt_mean_norm != 0
+    F[good] = F[good] / flt_mean_norm[good]
+
+    F[~np.isfinite(F)] = 0.0
     return F
 
 # ---------------------------------------------------------------------------- #
