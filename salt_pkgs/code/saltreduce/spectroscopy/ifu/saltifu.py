@@ -296,31 +296,32 @@ def trace_fibres(traces, fibres, windows, work, log):
     return True, traces
 
 # ---------------------------------------------------------------------------- #
-def extract_fibre_optimal(sci, gpm, flt_sub, gain, read_noise):
+def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight):
 # ---------------------------------------------------------------------------- #
     '''
     Horne 1986 optimal extraction method.
     Default extraction option.
     '''
     # spatial profile P from flat image
-    flt_masked = flt_sub * gpm  
-    col_sums = flt_masked.sum(axis=0)
+    flt_ap = flt * aperture_weight  # down-weight the flat ion the edge rows by how much of each row is really in the fiber
+    col_sums = flt_ap.sum(axis=0)   # sum across fibers
     col_sums[col_sums == 0] = 1.0
-    P = flt_masked / col_sums   # normalised to sum to 1 per column
+    P = flt_ap / col_sums   # normalised to sum to 1 per column
 
     sci_e = sci * gain               # [counts] --> [e-], science in electrons
     V_e = read_noise**2 + np.abs(sci_e)  # variance in electrons
     V_e[V_e <= 0] = 1.0                  # avoid division by zero
     V_e[gpm == 0] = 1e30             # bad pixels get very high variance
+    sci_ap = sci_e * aperture_weight  # down-weight the flat ion the edge rows by how much of each row is really in the fiber
 
     # Horne 1986 Eq. 8
-    num = np.sum(P * sci_e / V_e, axis=0)  # sum across rows
+    num = np.sum(P * sci_ap / V_e, axis=0)
     den = np.sum(P**2 / V_e, axis=0)       # ''
     good = den > 0                         # avoid divide by zero
     F_e = np.zeros_like(den, dtype=np.float32)
     F_e[good] = num[good] / den[good]      # [e-]
     F = F_e / gain                         # [e-] --> [counts] 
-    F[~np.isfinite(F)] = 0.0 
+    F[~np.isfinite(F)] = 0.0
 
     return F
 
@@ -352,6 +353,111 @@ def extract_fibre_boxcar(sciarr, gpmarr, fltarr):
     sciarr[non_nan] *= gpmarr[non_nan].mean()
 
     return sciarr
+
+# ---------------------------------------------------------------------------- #
+def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, work):
+# ---------------------------------------------------------------------------- #
+    '''
+    Top: extracted spectrum using both optimal and boxcar methods. 
+    Bottom: some diagnostic columns (plotting: raw-flat / optimal / boxcar profile, aperture weight, good-pixel mask).
+    '''
+    mark_colors = ['green', 'orange', 'purple']
+
+    if len(cols_to_debug) == 0:
+        return
+
+    rows = np.arange(flt.shape[0])
+    cols = np.arange(flt.shape[1])
+
+    def normalize(a):
+        s = a.sum(axis=0)
+        s = np.where(s == 0, 1.0, s)
+        return a / s
+
+    # extraction weighting from optimal and boxcar
+    P_raw = normalize(flt)                        # profile as it sits in the flat data
+    P_opt = normalize(flt * aperture_weight)      # optimal profile P
+    W_box = normalize(aperture_weight * gpm)      # boxcar effective weight (top-hat over good rows)
+
+    # extracted data from optimal and boxcar for fiber spectrum
+    F_opt = extract_fibre_optimal(sci_opt.copy(), gpm.copy(), flt.copy(), gain, read_noise, aperture_weight)
+    F_box = extract_fibre_boxcar(sciarr.copy(), gpmarr, fltarr.copy())
+    gpm_per_col = gpm.sum(axis=0)
+
+    fig = plt.figure(figsize=(4.6 * len(cols_to_debug), 10))
+
+    outer = fig.add_gridspec(2, 1, height_ratios=[2, 3], hspace=0.30)
+    # ===================== TOP: full-width spectrum + gpm count =====================
+    top = outer[0].subgridspec(2, 1, height_ratios=[3, 1], hspace=0.0)
+    axS = fig.add_subplot(top[0])
+    axC = fig.add_subplot(top[1], sharex=axS)
+
+    axS.set_title(f'extracted spectrum for fibre #{id} (method set to {method})', fontsize=15, pad=12)
+    axS.step(cols, F_box, where='mid', lw=0.8, color='red',  alpha=0.6, label='boxcar')
+    axS.step(cols, F_opt, where='mid', lw=0.8, color='blue', alpha=0.6, label='optimal')
+    axS.set_ylabel('[counts / s]', fontsize=12, labelpad=12)
+    axS.legend(fontsize=12, loc='upper right')
+    m = np.isfinite(F_opt) & np.isfinite(F_box)
+    if m.any():
+        hi = np.nanpercentile(np.concatenate([F_opt[m], F_box[m]]), 99)
+        axS.set_ylim(-8, max(hi, 1))
+    plt.setp(axS.get_xticklabels(), visible=False)
+
+    axC.fill_between(cols, 0, gpm_per_col, step='mid', color='grey', alpha=0.8)
+    axC.set_ylim(0, gpm_per_col.max() + 1)
+    axC.set_ylabel('# good pix', fontsize=10, labelpad=12)
+    axC.set_xlabel('wavelength column', fontsize=12, labelpad=10)
+
+    for j, col in enumerate(cols_to_debug):
+        c = mark_colors[j % len(mark_colors)]
+        axS.axvline(col, color=c, ls='dashed', lw=1.8, zorder=5)
+        axC.axvline(col, color=c, ls='dashed', lw=1.8, zorder=5)
+
+    # ===================== BOTTOM: one stack per debug column =====================
+    bottom = outer[1].subgridspec(1, len(cols_to_debug), wspace=0.05)
+    for j, col in enumerate(cols_to_debug):
+
+        good = gpm[:,col] == 1
+        F_ap = sci_opt[:,col] * aperture_weight[:,col]  * good  # aperture-weighted data with bad rows masked out
+        F_ap_normalized = F_ap / F_ap.sum()
+
+        c = mark_colors[j % len(mark_colors)]
+        cell = bottom[j].subgridspec(3, 1, height_ratios=[4, 1, 1], hspace=0.0)
+        axP = fig.add_subplot(cell[0])
+        axA = fig.add_subplot(cell[1], sharex=axP)
+        axM = fig.add_subplot(cell[2], sharex=axP)
+
+        ratio = F_opt[col]/F_box[col]
+        axP.set_title(f'col #{col},  opt/boxcar={ratio:.1f}', color=c, fontsize=12, pad=8)
+        axP.step(rows, F_ap_normalized, where='mid', lw=1.5, color='black', label='data', zorder=5)
+        axP.step(rows, P_raw[:, col], where='mid', lw=1.5, color='lightblue', label='raw flat')
+        axP.step(rows, P_opt[:, col], where='mid', lw=1.5, color='blue', alpha=0.8, label='optimal profile')
+        axP.step(rows, W_box[:, col], where='mid', lw=1.5, color='red', alpha=0.8, label='boxcar profile')
+        axP.set_ylim(-0.05, max(P_raw[:, col].max(), P_opt[:, col].max(), W_box[:, col].max(), F_ap_normalized.max()) * 1.1)
+        plt.setp(axP.get_xticklabels(), visible=False)
+
+        axA.fill_between(rows, 0, aperture_weight[:, col], step='mid', color='grey', alpha=0.8)
+        axA.set_ylim(-0.09, 1.15)
+        plt.setp(axA.get_xticklabels(), visible=False)
+
+        axM.fill_between(rows, 0, gpm[:, col], step='mid', color='grey', alpha=0.8)
+        axM.set_ylim(-0.09, 1.15)
+        axM.set_xlabel('fibre aperture row', fontsize=11, labelpad=8)
+
+        if j == 0: 
+            axP.set_ylabel('norm values', fontsize=11, labelpad=12)
+            axA.set_ylabel('weight', fontsize=9, labelpad=15)
+            axM.set_ylabel('# good pix', fontsize=9, labelpad=15)
+            axP.legend(fontsize=10, loc='upper left')
+        else:
+            for ax in (axP, axA, axM):
+                plt.setp(ax.get_yticklabels(), visible=False)
+
+    plot_dir = os.path.join(work['output']['dir'], 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    out_file = os.path.join(plot_dir, '{0}_extraction_debug_fibre{1}.png'.format(work['file'], id))
+    plt.savefig(out_file, dpi=300, format='png', bbox_inches='tight')
+    plt.close(fig)
 
 # ---------------------------------------------------------------------------- #
 def extract_fibres(sci, sci_unmasked, gpm, flt, traces, gain, read_noise, work, log):
@@ -394,7 +500,12 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, traces, gain, read_noise, work, 
         raise SALTError("Unknown extract_method: '{0}' (expected 'optimal' or 'boxcar')".format(method))
     
     # Add message to log
-    log.message(' - extract fibres: method = {0}'.format(method), with_header=False)
+    # log.message(' - extract fibres: method = {0}'.format(method), with_header=False)
+    print(' - extract fibres: method = {0}'.format(method))
+
+    ###### DEBUGGING ########
+    fiber_to_debug = '050'
+    #########################
 
     # Initialise extracted fibres and good pixels dictionaries
     fibres, good_pixels = {}, {}
@@ -402,11 +513,38 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, traces, gain, read_noise, work, 
     # Loop for fibre traces...
     for id, fibre in traces.items():
 
+        ###### DEBUGGING ########
+        if id != fiber_to_debug:
+            cols_to_debug = []
+        else:
+            cols_to_debug = [192, 1110, 1800]
+        #########################
+
         # Set fibre row range and oversampled 'valid' aperture mask
         r_min, r_max, valid = set_fibre(fibre, work)
 
-        # Good-pixel count per wavelength bin (GPCNT source; both methods)
+        # Good-pixel count per wavelength bin
         gpmarr = set_fibre_array(gpm, r_min, r_max, valid, work)
+
+        ######################## DEBUG PLOT  #################################
+        if len(cols_to_debug) != 0 and flt is not None:
+            # aperture weights for sub-pixel precision
+            n_rows = r_max - r_min            # number of pixels contributing to the fiber
+            n_sub_rows = work['row_repeat']   # number of sub-pixels contributing to the fiber
+            n_cols = valid.shape[-1]          # column (wavelength) pixels
+            aperture_weight = valid.reshape(n_rows, n_sub_rows, n_cols).mean(axis=1)  # averaging across sub-pixels to get sub-pixel precision on detector pixel resolution
+
+            # extract for optimal
+            sci_2D = sci_unmasked[r_min:r_max, :].copy()
+            gpm_2D = gpm[r_min:r_max, :].copy()
+            flt_2D = flt[r_min:r_max, :].copy()
+
+            # extract for boxcar
+            sciarr = set_fibre_array(sci, r_min, r_max, valid, work)
+            fltarr = set_fibre_array(flt, r_min, r_max, valid, work)
+
+            plot_extraction_comparison(method, id, cols_to_debug, sci_2D, gpm_2D, flt_2D, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, work)
+        #######################################################################
 
         # =========================== BOXCAR ===========================
         if method == 'boxcar':
@@ -423,14 +561,19 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, traces, gain, read_noise, work, 
 
         # =========================== OPTIMAL ==========================
         elif method == 'optimal':
-            
+            # computing sub-pixel precision (as with boxcar extraction)
+            n_rows = r_max - r_min            # number of pixels contributing to the fiber
+            n_sub_rows  = work['row_repeat']  # number of sub-pixels contributing to the fiber
+            n_cols = valid.shape[-1]          # column (wavelength) pixels
+            aperture_weight = valid.reshape(n_rows, n_sub_rows, n_cols).mean(axis=1)  # averaging across sub-pixels to get sub-pixel precision on detector pixel resolution
+
             # Extract fibres for all arrays
             sci_2D = sci_unmasked[r_min:r_max, :].copy()
             gpm_2D = gpm[r_min:r_max, :].copy()
             flt_2D = flt[r_min:r_max, :].copy()
         
             # Add fibre flux to extracted fibres dictionary
-            fibres[id] = extract_fibre_optimal(sci_2D, gpm_2D, flt_2D, gain, read_noise)
+            fibres[id] = extract_fibre_optimal(sci_2D, gpm_2D, flt_2D, gain, read_noise, aperture_weight)
 
         # Store good-pixel count for this fibre
         good_pixels[id] = gpmarr
