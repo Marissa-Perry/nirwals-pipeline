@@ -683,7 +683,6 @@ def extract_fibres_from_image(hdu, traces, work, log):
             else:
                 # Set flat field image
                 flt = fltlist[SCI].data.copy()
-
         # Set flat field or flat field continuum fit with gpm applied
         flt *= gpm
 
@@ -1673,7 +1672,7 @@ def fit_spectral_channels(image, work, log, gpcnt_image=None):
     wmax = 9820
 
     # evenly spaced spectral channel wavelengths
-    sample_wavs = np.linspace(wmin, wmax, 10)
+    sample_wavs = np.linspace(wmin, wmax, 3)
 
     # wavelengths to column indices
     diagnostic_cols = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs])
