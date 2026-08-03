@@ -18,6 +18,7 @@ import numpy as np
 # scipy imports
 from scipy.signal import find_peaks
 from scipy.signal import savgol_filter
+from scipy.ndimage import median_filter
 # astropy imports
 from astropy.io import fits
 from astropy.stats import sigma_clip, mad_std
@@ -1666,10 +1667,16 @@ def fit_spectral_channels(image, work, log, gpcnt_image=None):
 
     ####### DEBUG ######
     wav_grid = work['we']
-    wmin = 9874   # [A]
-    wmax = 9904   # [A]
-    sample_wavs = np.linspace(wmin, wmax, 5)  # evenly spaced spectral channel wavelengths
-    diagnostic_cols = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs])  # wavelengths to column indices
+
+    wmin_Yband = 9874   # [A]
+    wmax_Yband = 9904   # [A]
+    sample_wavs_Yband = np.linspace(wmin_Yband, wmax_Yband, 5)  # evenly spaced spectral channel wavelengths
+    diagnostic_cols_Yband = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs_Yband])  # wavelengths to column indices
+    
+    wmin_Jband = 12650   # [A]
+    wmax_Jband = 12750   # [A]
+    sample_wavs_Jband = np.linspace(wmin_Jband, wmax_Jband, 5)  # evenly spaced spectral channel wavelengths
+    diagnostic_cols_Jband = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs_Jband])  # wavelengths to column indices
     #####################
 
     # Loop for columns...
@@ -1697,7 +1704,7 @@ def fit_spectral_channels(image, work, log, gpcnt_image=None):
         sf_image[:, j][cm] = sf(work['s'])[cm]
 
         ####### DEBUG ######
-        if j in diagnostic_cols:
+        if (j in diagnostic_cols_Yband) or (j in diagnostic_cols_Jband):
             spec_channel_fit_diagnostic_plot(work, input_flux=farr,fit_flux=sf(work['s']),mask=cm,col=j)
         #####################
     
@@ -1876,7 +1883,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # Set object to sky spectral channels fit ratio
     rat_sf_image[nz] = sci_sf_image[nz] / sky_sf_image[nz]     # fiber- and wavelength-dependent scaling of sky emission in obj and sky frames
     rat_sf_image_masked = np.where(nz, rat_sf_image, np.nan)   # set zeros to NaNs
-    col_med = np.nanmedian(rat_sf_image_masked, axis=0)                        # median over fibres
+    col_med = np.nanmedian(rat_sf_image_masked, axis=0)        # median over fibres
     col_med[np.isnan(col_med)] = 1.0                           # set NaNs to unity
     # Broadcast back onto a 2D image
     rat_sf_image = col_med * np.ones((rat_sf_image.shape[0], rat_sf_image.shape[1]), dtype=np.float32)  # wavelength-dependent scaling of sky emission in obj and sky frames
@@ -2060,14 +2067,15 @@ def sky_line_scaling_plots(work, rat_sf_image, rat_cs_2d_norm, gpm_image, sci_cs
 
     # 2D scale-factor image
     im = axs[0].imshow(rat_sf_image_skylines, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=v0, vmax=v1, cmap=cmap_nan)
-    axs[0].set_ylabel('fiber #', fontsize=12, labelpad=10)
-    axs[0].set_title('wavelength-dependent sky-line scaling \n(rat_sf = sci_sf / sky_sf)', fontsize=14, pad=15)
+    axs[0].set_ylabel('fiber #', fontsize=14, labelpad=10)
+    axs[0].set_title('wavelength-dependent sky-line scaling \n(rat_sf = sci_sf / sky_sf)', fontsize=15, pad=15)
     colorbar_axis(axs[0], im, label='scale factor')
 
     # Median trend vs spectral channel
     axs[1].scatter(chan_idx, rat_sf_trend, s=2, color='black', alpha=0.5)
     axs[1].axhline(1.0, color='r', lw=0.8, ls='--')
     axs[1].set_ylabel('median\nscale factor', fontsize=11, labelpad=10)
+    axs[1].set_xlabel('spectral channel', fontsize=14, labelpad=10)
     axs[1].set_ylim(0, 2.5)
     axs[1].set_xlim(0, n_chan)
     colorbar_axis(axs[1])
@@ -2086,8 +2094,8 @@ def sky_line_scaling_plots(work, rat_sf_image, rat_cs_2d_norm, gpm_image, sci_cs
 
     axs[0].plot(fibre_idx, rat_cs_1d_norm, lw=1.2, color='k')
     axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
-    axs[0].set_ylabel('normalised obj/sky', fontsize=12, labelpad=10)
-    axs[0].set_title('fiber-dependent sky-line scaling', fontsize=14, pad=15)
+    axs[0].set_ylabel('scale factor', fontsize=12, labelpad=10)
+    axs[0].set_title('fiber-dependent sky-line scaling \nmedian-normalized rat_cs_1d (sci_cs_1d / sky_cs_1d)', fontsize=14, pad=15)
 
     axs[1].fill_between(fibre_idx, 0, n_gpm_per_fibre, step='mid', color='grey', alpha=0.3)
     axs[1].set_ylabel('# good pixels', fontsize=11, labelpad=10)
