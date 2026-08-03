@@ -1666,19 +1666,10 @@ def fit_spectral_channels(image, work, log, gpcnt_image=None):
 
     ####### DEBUG ######
     wav_grid = work['we']
-    # wmin = 10250  # straddling a strong sky-line at ~10289 A
-    # wmax = 10350  # ''
-    wmin = 9780
-    wmax = 9820
-
-    # evenly spaced spectral channel wavelengths
-    sample_wavs = np.linspace(wmin, wmax, 3)
-
-    # wavelengths to column indices
-    diagnostic_cols = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs])
-
-    # initialize list of fiber numbers that are major outliers in each diagnostic column
-    outlier_fiber_list = []
+    wmin = 9874   # [A]
+    wmax = 9904   # [A]
+    sample_wavs = np.linspace(wmin, wmax, 5)  # evenly spaced spectral channel wavelengths
+    diagnostic_cols = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs])  # wavelengths to column indices
     #####################
 
     # Loop for columns...
@@ -1707,18 +1698,7 @@ def fit_spectral_channels(image, work, log, gpcnt_image=None):
 
         ####### DEBUG ######
         if j in diagnostic_cols:
-            outlier_fibers = spec_channel_fit_diagnostic_plot(
-                work, 
-                input_flux=farr,
-                fit_flux=sf(work['s']),
-                mask=cm,
-                col=j
-                )
-
-            # for all outlier fibers ...
-            if (len(outlier_fibers) > 0):
-                for fib_num in outlier_fibers:
-                    outlier_fiber_list.append(fib_num)
+            spec_channel_fit_diagnostic_plot(work, input_flux=farr,fit_flux=sf(work['s']),mask=cm,col=j)
         #####################
     
     # Set NaN to 1
@@ -1766,27 +1746,6 @@ def spec_channel_fit_diagnostic_plot(work, input_flux, fit_flux, mask, col):
     fibers = fibre_index[mask]
     fluxes = input_flux[mask]
     fluxes_fit = fit_flux[mask]
-    residuals = fluxes - fluxes_fit
-
-    # compute sigma of fit
-    # (using MAD instead of stdev to compute sigma to be more robust to outliers)
-    median_residuals = np.nanmedian(residuals)
-    abs_residual_difference = np.abs(residuals - median_residuals)
-    MAD = np.nanmedian(abs_residual_difference)
-    sigma = 1.4826 * MAD
-
-    sigma_threshold = 5.0
-    outlier_mask = abs_residual_difference > sigma_threshold * sigma
-    outlier_fibers = fibers[outlier_mask]
-
-    # # get a list of fibers that are outliers
-    # outlier_fibers = []
-    # for i, fiber_input_flux in enumerate(input_flux[mask]):
-    #     fiber_fit_flux = fit_flux[mask][i]
-
-    #     # if input flux values are 20 * the fit (roughly an outlier? need a better quantification)
-    #     if (fiber_input_flux > 15+fiber_fit_flux): #or (fiber_input_flux < 20/fiber_fit_flux):
-    #         outlier_fibers.append(fibre_index[mask][i])
 
     plt.figure(figsize=(8, 5))
 
@@ -1809,8 +1768,7 @@ def spec_channel_fit_diagnostic_plot(work, input_flux, fit_flux, mask, col):
     # Save plot as png
     plt.savefig(filepath, dpi=180, format='png', bbox_inches="tight")
     plt.close()
-
-    return outlier_fibers
+    return
 
 
 # ---------------------------------------------------------------------------- #
@@ -1916,7 +1874,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # Set non-zero mask from sky spectral channels fit image
     nz = sky_sf_image != 0.
     # Set object to sky spectral channels fit ratio
-    rat_sf_image[nz] = sci_sf_image[nz] / sky_sf_image[nz]  # wavelength-dependent scaling of sky emission in obj and sky frames
+    rat_sf_image[nz] = sci_sf_image[nz] / sky_sf_image[nz]     # fiber- and wavelength-dependent scaling of sky emission in obj and sky frames
+    rat_sf_image_masked = np.where(nz, rat_sf_image, np.nan)   # set zeros to NaNs
+    col_med = np.nanmedian(rat_sf_image_masked, axis=0)                        # median over fibres
+    col_med[np.isnan(col_med)] = 1.0                           # set NaNs to unity
+    # Broadcast back onto a 2D image
+    rat_sf_image = col_med * np.ones((rat_sf_image.shape[0], rat_sf_image.shape[1]), dtype=np.float32)  # wavelength-dependent scaling of sky emission in obj and sky frames
+
     # Initialise gpm image array (copy of sky spectral channels fit)
     gpm_image = sky_sf_image.copy()
     # Set gpm threshold dictionary for masking sky spectral channels fit
@@ -1959,53 +1923,32 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # Set object to sky continuum subtracted ratio array (1D)
     rat_cs_1d[nz] = sci_cs_1d[nz] / sky_cs_1d[nz]
     # Normalise object to sky continuum subtracted ratio array (1D)
-    # rat_cs_1d /= rat_cs_1d.mean()     # renaming variables for plotting !!!!
     rat_cs_1d_norm = rat_cs_1d / np.median(rat_cs_1d)
+    outliers = (rat_cs_1d_norm < 0.9) | (rat_cs_1d_norm > 1.1)  # flag scale-factor values outside of the expected range
+    rat_cs_1d_norm[outliers] = 1.0                              # set these outliers to unity (unscaled)
     # Repeat 1D object to sky ratio to same column dimension as 2D images
-    # rat_cs_2d = np.repeat(rat_cs_1d, rat_sf_image.shape[1], axis=1)   # renaming variables for plotting !!!
     rat_cs_2d_norm = np.repeat(rat_cs_1d_norm, rat_sf_image.shape[1], axis=1)
 
-    sky_line_sum_diagnostic_plot(
-        work,
-        sky_spectral_sum_arr=sky_cs_1d,
-        object_spectral_sum_arr=sci_cs_1d,
-        )
-    
-    # Combine normalised wavelength and position scalings
-    # rat_sf_image *= rat_cs_2d_norm                   # renaming variables for plotting !!!!        
-    scaling_image = rat_sf_image * rat_cs_2d_norm    # combining wavelength-dependent and fiber-dependent ratios
-    # Clean interline regions
-    # rat_sf_image *= gpm_image              # renaming variables for plotting !!!!        
-    scaling_image_masked = scaling_image * gpm_image         # interline regions set to 0
-    # Set interline regions to unity
-    # rat_sf_image[rat_sf_image < 1e-2] = 1.                   # using renamed variable for plotting !!!!       
-    scaling_image_masked[scaling_image_masked < 1e-2] = 1.      # interline regions (value of zero) do not contribute to later scaling (factor=1)
+    sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr=sky_cs_1d, object_spectral_sum_arr=sci_cs_1d)  
 
-    # Scale sky continuum subtracted image
-    # sky_scaled = sky_cs_image * rat_sf_image            # using renamed variable for plotting !!!!       
+    # Combine normalised wavelength and position scalings
+    scaling_image = rat_sf_image * rat_cs_2d_norm    # combining wavelength-dependent and fiber-dependent ratios
+    # Clean interline regions  
+    scaling_image_masked = scaling_image * gpm_image # interline regions set to 0
+    # Set interline regions to unity   
+    scaling_image_masked[scaling_image_masked < 1e-2] = 1.   # interline regions (value of zero) and negative sky-scaling factors do not contribute to later scaling (factor=1)
+
+    # Scale sky continuum subtracted image 
     sky_scaled = sky_cs_image * scaling_image_masked      # scaling the sky lines in the sky frame to the sky lines in the object frame
     # Subtract scaled image from object continuum subtracted image
     sci_image = sci_cs_image - sky_scaled
 
-    sky_line_scaling_diagnostic_plot(
-        work,
-        sci_cs_image=sci_cs_image,
-        sky_cs_image=sky_cs_image,
-        fiber_dep_scaling_ratio_2d=rat_cs_2d_norm,
-        sky_combined_scaling_factor_2d=scaling_image_masked,
-        sky_scaled=sky_scaled, 
-        sci_image=sci_image,
-        skyline_mask=gpm_image
-        )
+    sky_line_scaling_plots(work, rat_sf_image, rat_cs_2d_norm, gpm_image, sci_cs_image, sky_cs_image, scaling_image_masked, sky_scaled)
 
     # Add continuum back in
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image)
 
-    # skyline_residuals_plot(
-    #     work,
-    #     flattened_obj_cs_2d=sci_image,
-    #     skyline_mask=gpm_image
-    #     )
+    skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=gpm_image)
 
     # Add sky subtracted header key
     value = time.asctime(time.localtime())
@@ -2013,54 +1956,6 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     hdu['Primary'].header['SKYSUB'] = (value, comment)
 
     return sci_image, sci_image_with_cont
-
-
-# TEST DIAGNOSTIC PLOT
-# ---------------------------------------------------------------------------- #
-def skyline_residuals_plot(work, flattened_obj_cs_2d, skyline_mask):
-# ---------------------------------------------------------------------------- #
-    '''
-    plotting the summed residual intensity of all skylines for each fiber in the object frame after subtraction.
-    These skylines are identified with the sky-fit images and meet the set threshold value.
-    '''
-
-    # keep only skyline regions
-    masked = flattened_obj_cs_2d * skyline_mask
-
-    n_fibres = masked.shape[0]
-
-    mean_resid = np.zeros(n_fibres, dtype=float)
-    median_resid = np.zeros(n_fibres, dtype=float)
-
-    for i in range(n_fibres):
-        # sky sub intensity for i-th fiber
-        #       for all skyline spectral regions 
-        vals = masked[i, skyline_mask[i, :] > 0]
-
-        mean_resid[i] = np.mean(vals)
-        median_resid[i] = np.median(vals)
-
-    fibre_idx = np.arange(n_fibres)
-
-    plt.figure(figsize=(8, 5))
-    plt.plot(fibre_idx, mean_resid, color='black', alpha=0.3, label='mean')
-    plt.plot(fibre_idx, median_resid, color='red', alpha=0.7, label='median')
-    plt.axhline(0, color='grey', linestyle='--', alpha=0.4)
-    plt.ylim(np.min(mean_resid) - 0.2, np.max(mean_resid) + 0.2)
-    plt.xlabel('fiber #', fontsize=12, labelpad=15)
-    plt.ylabel('residual sky-line intensity', fontsize=12, labelpad=15)
-    plt.legend(fontsize=12)
-    # Set png file
-    plot_dir = os.path.join(work['output']['dir'],'plots')
-    os.makedirs(plot_dir, exist_ok=True)
-    png_file = '{0}_residual_sky_vs_fiber_threshold_0.5.png'.format(work['file'])
-    # Add output directory path to png file
-    filepath = os.path.join(plot_dir, png_file)
-    # Save plot as png
-    plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
-    plt.close()
-
-    return
 
 
 # TEST DIAGNOSTIC PLOT
@@ -2095,119 +1990,359 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum
 
     return
 
-# TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def sky_line_scaling_diagnostic_plot(work, sci_cs_image, sky_cs_image, fiber_dep_scaling_ratio_2d, sky_combined_scaling_factor_2d, sky_scaled, sci_image, skyline_mask=None):
+def sky_line_scaling_plots(work, rat_sf_image, rat_cs_2d_norm, gpm_image, sci_cs_image, sky_cs_image, scaling_image_masked, sky_scaled):
 # ---------------------------------------------------------------------------- #
     '''
-    For each diagnostic fiber, plots:
-        Row 1: sci_cs, sky_cs, and scaled_sky spectra at sky-line wavelengths
-                --> shows what is being subtracted and whether sky_scaled is too small/large
-        Row 2: combined scaling factor applied to sky frame
-                --> shows whether the scaling is anomalous for bright fibers
-        Row 3: cumulative flux budget: sci_cs - sky_scaled = sci_image
-                --> shows the net effect of sky subtraction on the flux
+    Diagnostic plots for the sky-line scaling factor
+
+    Three figures:
+
+      1. {file}_skyline_scaling_wavelength.png
+         Wavelength-dependent scaling (rat_sf_image = sci_sf / sky_sf), i.e. the relative sky-line strength between the target and sky frames as a function of wavelength. 
+         Showing its 2D image, median trend over good pixels, and the number of good pixels per spectral channel.
+
+      2. {file}_skyline_scaling_fiber.png
+         Normalised object-to-sky continuum-subtracted ratio, i.e., the fiber-dependent scaling.
+        Also showing the number of good pixels per fiber.
+
+      3. {file}_skyline_scaling_before_after.png
+         Sky before scaling (sky_cs_image), the scale-factor (scaling_image_masked), and the sky after scaling (sky_scaled).
     '''
-    # after rectification, all fibers share the same wavelength grid
-    wav_grid = work['we']
-    offset = 10   #[A]
+    import matplotlib as mpl
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-    diagnostic_fibers = [0, 7, 39, 55, 188, 198, 206, 207, 208, 209]
-    for fiber_num in diagnostic_fibers:
+    # Image dimensions and pixel-index axes
+    n_fibre, n_chan = rat_sf_image.shape
+    fibre_idx = np.arange(n_fibre)
+    chan_idx = np.arange(n_chan)
 
-        # skip fibers that don't exist in this exposure or have no skyline pixels
-        if fiber_num >= sci_cs_image.shape[0]:
-            continue
-        m = (skyline_mask[fiber_num, :] == 1)  # sky-line wavelength mask
-        if m.sum() == 0:
+    # Good-pixel counts collapsed along each dimension
+    n_gpm_per_chan = gpm_image.sum(axis=0)     # per spectral channel (max = n_fibre)
+    n_gpm_per_fibre = gpm_image.sum(axis=1)    # per fiber            (max = n_chan)
 
-            wav_grid_masked = wav_grid[m]
+    # Output directory / filename stub (same pattern as the other plots)
+    plot_dir = os.path.join(work['output']['dir'], 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    stub = os.path.join(plot_dir, work['file'])
 
-            # --- quantities at sky-line wavelengths ---
-            sci_cs_spec = sci_cs_image[fiber_num, m]
-            sky_cs_spec = sky_cs_image[fiber_num, m]
-            sky_scl_spec = sky_scaled[fiber_num, m]
-            sci_img_spec = sci_image[fiber_num, m]
-            combined = sky_combined_scaling_factor_2d[fiber_num, m]
-            fib_ratio = fiber_dep_scaling_ratio_2d[fiber_num, 0]   # scalar per fiber
+    # Sequential colormap whose 'bad' (NaN) value renders white, used for the
+    # panels where interline regions are masked out
+    cmap_nan = mpl.colormaps['magma'].copy()
+    cmap_nan.set_bad('white')
 
-            # --- summed quantities (the flux budget) ---
-            sum_sci_cs = sci_cs_image[fiber_num, :].sum()
-            sum_sky_scl = sky_scaled[fiber_num, :].sum()
-            sum_sci_img = sci_image[fiber_num, :].sum()
+    # Helper: give every panel its own colorbar axis so stacked panels keep an
+    # identical width (line panels get an invisible cax; image panels a real one)
+    def colorbar_axis(ax, mappable=None, label=None):
+        cax = make_axes_locatable(ax).append_axes('right', size='2.5%', pad=0.1)
+        if mappable is None:
+            cax.axis('off')
+        else:
+            cb = plt.colorbar(mappable, cax=cax)
+            if label:
+                cb.set_label(label, fontsize=10)
+        return cax
 
-            fig, axes = plt.subplots(4, 1, figsize=(10, 13), tight_layout=True)
-            fig.suptitle(f'sky-subtraction diagnostic — fiber #{fiber_num}', fontsize=14)
+    # ------------------------------------------------------------------ #
+    # 1) wavelength-dependent scaling (rat_sf_image)
+    # ------------------------------------------------------------------ #
+    # Keep the sky-line pixels, set interline (gpm == 0) to NaN so they show white
+    rat_sf_image_skylines = np.where(gpm_image > 0, rat_sf_image, np.nan)
 
-            # --- Row 1: spectra at sky-line wavelengths ---
-            # y_2, y_98 = np.percentile(sci_cs_spec, [2, 98])
-            # y_lower = y_2 - 10  # 10 counts/s padding
-            # y_upper = y_98 + 30 # 30 counts/s padding
+    # colorbar limits (NaN interline auto-excluded)
+    v0, v1 = np.nanpercentile(rat_sf_image_skylines, [2, 98])
 
-            ax = axes[0]
-            ax.scatter(wav_grid_masked, sci_cs_spec, s=3, color='black', label='obj cs')
-            ax.scatter(wav_grid_masked - offset*2, sky_cs_spec, s=3, color='orange', label='sky cs')
-            ax.scatter(wav_grid_masked - offset, sky_scl_spec, s=3, color='blue', label='sky scaled')
-            # ax.step(wav_grid_masked, sci_cs_spec,  where='mid', color='black',  lw=1.2, label='obj cs')
-            # ax.step(wav_grid_masked - offset*2, sky_cs_spec,  where='mid', color='orange', lw=1.2, alpha=0.7, label='sky cs')
-            # ax.step(wav_grid_masked - offset, sky_scl_spec, where='mid', color='blue',   lw=1.2, alpha=0.7, label='sky scaled')
-            ax.axhline(0, color='grey', linestyle='--', linewidth=0.6, alpha=0.5)
-            ax.set_ylabel('counts / s', fontsize=11)
-            ax.set_title('spectra at sky-line wavelengths', fontsize=10)
-            ax.legend(fontsize=10, loc='upper right')
-            ax.set_ylim(np.min(sci_cs_spec) - 5, np.max(sci_cs_spec) + 5)
+    # median trend (removing fiber dependence !)
+    rat_sf_masked = np.ma.masked_where(gpm_image <= 0, rat_sf_image)
+    rat_sf_trend = np.ma.median(rat_sf_masked, axis=0).filled(np.nan)
 
-            # --- Row 2: combined scaling factor ---
-            ax = axes[1]
-            ax.scatter(wav_grid_masked, combined,  color='black', s=3, label='wavelength * fiber scale factor')
-            ax.axhline(fib_ratio, color='grey', linestyle='--', linewidth=1.2, alpha=0.9, label=f'fiber scale factor ({fib_ratio:.2f})')
-            ax.set_ylabel('scale factor', fontsize=11)
-            ax.set_title('scaling for sky frame: wavelength scaling (obj/sky skyfit for skylines) & fiber scaling (wavelength-avg obj/sky cs for skylines)', fontsize=10)
-            ax.legend(fontsize=10, loc='upper right')
+    fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [3, 1]})
 
-            # --- Row 3: result of sky subtraction at sky-line wavelengths ---
-            # y_2, y_98 = np.percentile(sci_img_spec, [2, 98])
-            # y_lower = y_2 - 10  # 10 counts/s padding
-            # y_upper = y_98 + 20 # ''
+    # 2D scale-factor image
+    im = axs[0].imshow(rat_sf_image_skylines, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=v0, vmax=v1, cmap=cmap_nan)
+    axs[0].set_ylabel('fiber #', fontsize=12, labelpad=10)
+    axs[0].set_title('wavelength-dependent sky-line scaling \n(rat_sf = sci_sf / sky_sf)', fontsize=14, pad=15)
+    colorbar_axis(axs[0], im, label='scale factor')
 
-            ax = axes[2]
-            ax.scatter(wav_grid_masked, sci_cs_spec, s=3, color='black', label='obj cs (before sky-sub)')
-            ax.scatter(wav_grid_masked - offset, sci_img_spec, s=3, color='red', label='sci image (after sky-sub)')
-            # ax.step(wav_grid_masked, sci_cs_spec,  where='mid', color='black', lw=1.2, alpha=0.9, linestyle='--', label='obj cs (before sky-sub)')
-            # ax.step(wav_grid_masked, sci_img_spec, where='mid', color='red', alpha=0.6, lw=1.2, label='sci image (after sky-sub)')
-            ax.axhline(0, color='grey', linestyle='--', linewidth=0.6, alpha=0.5)
-            ax.set_xlabel('wavelength [Å]', fontsize=11)
-            ax.set_ylabel('counts / s', fontsize=11)
-            ax.set_title('sky subtraction result at sky-line wavelengths', fontsize=10)
-            ax.legend(fontsize=10, loc='upper right')
-            ax.set_ylim(np.min(sci_img_spec) - 5, np.max(sci_img_spec) + 5)
+    # Median trend vs spectral channel
+    axs[1].scatter(chan_idx, rat_sf_trend, s=2, color='black', alpha=0.5)
+    axs[1].axhline(1.0, color='r', lw=0.8, ls='--')
+    axs[1].set_ylabel('median\nscale factor', fontsize=11, labelpad=10)
+    axs[1].set_ylim(0, 2.5)
+    axs[1].set_xlim(0, n_chan)
+    colorbar_axis(axs[1])
 
+    fig.savefig(stub + '_skyline_scaling_wavelength.png', dpi=180, format='png', bbox_inches='tight')
+    plt.close(fig)
 
-            # --- Row 4: flux budget (summed over all wavelengths) ---
-            ax = axes[3]
-            labels = ['sci_cs\n(before sub)', 'sky_scaled\n(subtracted)', 'sci_image\n(after sub)']
-            values = [sum_sci_cs, sum_sky_scl, sum_sci_img]
-            colors = ['black', 'blue', 'red']
-            bars = ax.bar(labels, values, color=colors, alpha=0.5)
-            # annotate bar values
-            for bar, val in zip(bars, values):
-                ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
-                        f'{val:.0f}', ha='center', va='bottom', fontsize=9)
-            ax.set_ylabel('summed flux (counts / s)', fontsize=11)
-            ax.set_title('flux budget: sci_cs - sky_scaled = sci_image', fontsize=10)
+    # ------------------------------------------------------------------ #
+    # 2) fiber-dependent scaling (normalised obj-to-sky ratio)
+    # ------------------------------------------------------------------ #
 
-            # Set png file
-            plot_dir = os.path.join(work['output']['dir'],'plots')
-            os.makedirs(plot_dir, exist_ok=True)
-            png_file = '{0}_sky_scaled_spectrum_of_fiber_{1}.png'.format(work['file'],fiber_num)
-            # Add output directory path to png file
-            filepath = os.path.join(plot_dir, png_file)
-            # Save plot as png
-            plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
-            plt.close()
+    # rat_cs_2d_norm is constant along the spectral axis -> recover the 1D curve
+    rat_cs_1d_norm = rat_cs_2d_norm[:, 0]
+
+    fig, axs = plt.subplots(2, 1, figsize=(8, 4), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [4, 1]})
+
+    axs[0].plot(fibre_idx, rat_cs_1d_norm, lw=1.2, color='k')
+    axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
+    axs[0].set_ylabel('normalised obj/sky', fontsize=12, labelpad=10)
+    axs[0].set_title('fiber-dependent sky-line scaling', fontsize=14, pad=15)
+
+    axs[1].fill_between(fibre_idx, 0, n_gpm_per_fibre, step='mid', color='grey', alpha=0.3)
+    axs[1].set_ylabel('# good pixels', fontsize=11, labelpad=10)
+    axs[1].set_xlabel('fiber #', fontsize=12, labelpad=12)
+    axs[1].set_xlim(0, n_fibre - 1)
+
+    fig.savefig(stub + '_skyline_scaling_fiber.png', dpi=180, format='png', bbox_inches='tight')
+    plt.close(fig)
+
+    # ------------------------------------------------------------------ #
+    # 3) sky-line image before / after scaling
+    # ------------------------------------------------------------------ #
+
+    # Shared flux limits (from the 'before' image) so before/after are comparable
+    f0, f1 = np.nanpercentile(sky_cs_image, [2, 99])
+
+    # Scale-factor panel: mark interline via the GPM (the pipeline already set
+    # those pixels to 1.0, so a value threshold would miss them). Copy so the
+    # passed-in array is not mutated.
+    scaling_disp = scaling_image_masked.copy()
+    scaling_disp[gpm_image <= 0] = np.nan
+
+    # colorbar limits (NaN interline auto-excluded)
+    v0, v1 = np.nanpercentile(scaling_disp, [2, 98])
+
+    fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
+
+    # Before
+    im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap='magma')
+    axs[0].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    axs[0].set_title('sky continuum-subtracted image  (sky_cs_image)', fontsize=12)
+    colorbar_axis(axs[0], im0, label='counts')
+
+    # Applied scale factor (interline white)
+    im1 = axs[1].imshow(scaling_disp, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=v0, vmax=v1, cmap=cmap_nan)
+    axs[1].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    axs[1].set_title('applied scale-factor image  (scaling_image_masked)', fontsize=12)
+    colorbar_axis(axs[1], im1, label='scale factor')
+
+    # compute sky subtraction results
+    sci_image_unscaled_sub = sci_cs_image - sky_cs_image
+    sci_image_scaled_sub = sci_cs_image - sky_scaled
+
+    # signed limits (mostly-positive residuals), shared by both residual panels
+    both = np.concatenate([sci_image_unscaled_sub.ravel(), sci_image_scaled_sub.ravel()])
+    r0, r1 = np.nanpercentile(both, [1, 90])
+
+    im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
+    axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    axs[2].set_title('unscaled sky-sub science (sci_cs_image - sky_cs_image)', fontsize=12)
+    colorbar_axis(axs[2], im2, label='counts')
+
+    im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
+    axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    axs[3].set_title('scaled sky-sub science (sci_cs_image - sky_scaled)', fontsize=12)
+    axs[3].set_xlabel('spectral channel', fontsize=12, labelpad=12)
+    colorbar_axis(axs[3], im3, label='counts')
+
+    fig.savefig(stub + '_skyline_scaling_before_after.png', dpi=180, format='png', bbox_inches='tight')
+    plt.close(fig)
 
     return
 
+    # # Image dimensions and pixel-index axes
+    # n_fibre, n_chan = rat_sf_image.shape
+    # fibre_idx = np.arange(n_fibre)
+    # chan_idx = np.arange(n_chan)
+
+    # # Good-pixel counts collapsed along each dimension
+    # n_gpm_per_chan = gpm_image.sum(axis=0)     # per spectral channel (max = n_fibre)
+    # n_gpm_per_fibre = gpm_image.sum(axis=1)    # per fiber            (max = n_chan)
+
+    # # Output directory / filename stub (same pattern as the other plots)
+    # plot_dir = os.path.join(work['output']['dir'], 'plots')
+    # os.makedirs(plot_dir, exist_ok=True)
+    # stub = os.path.join(plot_dir, work['file'])
+
+    # # Helper: give every panel its own colorbar axis so stacked panels keep an
+    # # identical width (line panels get an invisible cax; image panels a real one)
+    # def colorbar_axis(ax, mappable=None, label=None):
+    #     cax = make_axes_locatable(ax).append_axes('right', size='2.5%', pad=0.1)
+    #     if mappable is None:
+    #         cax.axis('off')
+    #     else:
+    #         cb = plt.colorbar(mappable, cax=cax)
+    #         if label:
+    #             cb.set_label(label, fontsize=10)
+    #     return cax
+
+    # # ------------------------------------------------------------------ #
+    # # 1) wavelength-dependent scaling (rat_sf_image)
+    # # ------------------------------------------------------------------ #
+    # rat_sf_image_skylines = rat_sf_image * gpm_image          # set skyline region scale factors to 0
+    # rat_sf_image_skylines[rat_sf_image_skylines < 1e-2] = np.nan  # set skyline region scale factors to 1
+
+    # # colorbar limits
+    # v0, v1 = np.nanpercentile(rat_sf_image_skylines, [2, 98]) 
+
+    # # median trend (removing fiber dependence !)
+    # rat_sf_masked = np.ma.masked_where(gpm_image <= 0, rat_sf_image)
+    # rat_sf_trend = np.ma.median(rat_sf_masked, axis=0).filled(np.nan)
+
+    # fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [3, 1]})
+
+    # # 2D scale-factor image
+    # im = axs[0].imshow(rat_sf_image_skylines , origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=v0, vmax=v1, cmap='magma')
+    # axs[0].set_ylabel('fiber #', fontsize=12, labelpad=10)
+    # axs[0].set_title('wavelength-dependent sky-line scaling \n(rat_sf = sci_sf / sky_sf)', fontsize=14, pad=15)
+    # colorbar_axis(axs[0], im, label='scale factor')
+
+    # # Median trend vs spectral channel
+    # axs[1].scatter(chan_idx, rat_sf_trend, s=2, color='black', alpha=0.5)
+    # axs[1].axhline(1.0, color='r', lw=0.8, ls='--')
+    # axs[1].set_ylabel('median\nscale factor', fontsize=11, labelpad=10)
+    # axs[1].set_ylim(0, 2.5)
+    # axs[1].set_xlim(0, n_chan)
+    # colorbar_axis(axs[1])
+
+    # fig.savefig(stub + '_skyline_scaling_wavelength.png', dpi=180, format='png', bbox_inches='tight')
+    # plt.close(fig)
+
+    # # ------------------------------------------------------------------ #
+    # # 2) fiber-dependent scaling (normalised obj-to-sky ratio)
+    # # ------------------------------------------------------------------ #
+
+    # # rat_cs_2d_norm is constant along the spectral axis -> recover the 1D curve
+    # rat_cs_1d_norm = rat_cs_2d_norm[:, 0]
+
+    # fig, axs = plt.subplots(2, 1, figsize=(8, 4), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [4, 1]})
+
+    # axs[0].plot(fibre_idx, rat_cs_1d_norm, lw=1.2, color='k')
+    # axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
+    # axs[0].set_ylabel('normalised obj/sky', fontsize=12, labelpad=10)
+    # axs[0].set_title('fiber-dependent sky-line scaling',fontsize=14, pad=15)
+
+    # axs[1].fill_between(fibre_idx, 0, n_gpm_per_fibre, step='mid', color='grey', alpha=0.3)
+    # axs[1].set_ylabel('# good pixels', fontsize=11, labelpad=10)
+    # axs[1].set_xlabel('fiber #', fontsize=12, labelpad=12)
+    # axs[1].set_xlim(0, n_fibre - 1)
+
+    # fig.savefig(stub + '_skyline_scaling_fiber.png', dpi=180, format='png', bbox_inches='tight')
+    # plt.close(fig)
+
+    # # ------------------------------------------------------------------ #
+    # # 3) sky-line image before / after scaling
+    # # ------------------------------------------------------------------ #
+
+    # # Shared flux limits (from the 'before' image) so before/after are comparable
+    # f0, f1 = np.nanpercentile(sky_cs_image, [2, 99])
+
+    # # # Symmetric limits about unity for the scale-factor image
+    # # sgood = scaling_image_masked[gpm_image > 0]
+    # # if sgood.size == 0:
+    # #     sgood = scaling_image_masked.ravel()
+    # # slo, shi = np.nanpercentile(sgood, [2, 98])
+    # # shalf = max(abs(1.0 - slo), abs(shi - 1.0), 1e-3)
+    # # s0 = 1.0 - shalf  # quantile
+    # # s1 = 1.0 + shalf  # ''
+
+    # scaling_image_masked[scaling_image_masked < 1e-2] = np.nan  # set skyline region scale factors to NaN
+
+    # # colorbar limits
+    # v0, v1 = np.nanpercentile(scaling_image_masked, [2, 98]) 
+
+    # fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
+
+    # # Before
+    # im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap='magma')
+    # axs[0].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    # axs[0].set_title('sky continuum-subtracted image  (before scaling)', fontsize=12)
+    # colorbar_axis(axs[0], im0, label='counts')
+
+    # # Applied scale factor
+    # im1 = axs[1].imshow(scaling_image_masked, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=v0, vmax=v1, cmap='magma')
+    # axs[1].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    # axs[1].set_title('applied scale-factor image  (scaling_image_masked)', fontsize=12)
+    # colorbar_axis(axs[1], im1, label='scale factor')
+
+    # # compute sky subtraction results
+    # sci_image_unscaled_sub = sci_cs_image - sky_cs_image
+    # sci_image_scaled_sub = sci_cs_image - sky_scaled
+
+    # r0, r1 = np.nanpercentile(np.abs(np.concatenate([sci_image_unscaled_sub.ravel(), sci_image_scaled_sub.ravel()])), [1, 95])
+    # # r0, r1 = -r, r
+
+    # im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
+    # axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    # axs[2].set_title('unscaled sky-sub science (sci_cs_image - sky_cs_image)', fontsize=12)
+    # colorbar_axis(axs[2], im2, label='counts')
+
+    # im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
+    # axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    # axs[3].set_title('scaled sky-sub science (sci_cs_image - sky_scaled)', fontsize=12)
+    # colorbar_axis(axs[3], im3, label='counts')
+
+    # # # After
+    # # im2 = axs[2].imshow(sky_scaled, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap='magma')
+    # # axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    # # axs[2].set_title('sky-line image  (after scaling: sky_cs * scaling)', fontsize=12)
+    # # axs[2].set_xlabel('spectral channel', fontsize=12, labelpad=12)
+    # # colorbar_axis(axs[2], im2, label='flux')
+
+    # fig.savefig(stub + '_skyline_scaling_before_after.png', dpi=180, format='png', bbox_inches='tight')
+    # plt.close(fig)
+
+    # return
+
+
+# TEST DIAGNOSTIC PLOT
+# ---------------------------------------------------------------------------- #
+def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask):
+# ---------------------------------------------------------------------------- #
+    '''
+    plotting the residual intensity of all skylines for each fiber in the object frame after subtraction.
+    These skylines are identified with the sky-fit images and meet the set threshold value.
+    '''
+
+    # residual flux in skyline regions of science image
+    sci_skyline_region_flux = sci_cs_image_skysub * skyline_mask
+
+    n_fibres = sci_skyline_region_flux.shape[0]
+
+    mean_resid = np.zeros(n_fibres, dtype=float)
+    median_resid = np.zeros(n_fibres, dtype=float)
+
+    for i in range(n_fibres):
+        # sky sub intensity for i-th fiber
+        #       for all skyline spectral regions 
+        vals = sci_skyline_region_flux[i, skyline_mask[i, :] > 0]
+
+        mean_resid[i] = np.mean(vals)
+        median_resid[i] = np.median(vals)
+
+    fibre_idx = np.arange(n_fibres)
+
+    plt.figure(figsize=(8, 5))
+    plt.title('sky-subtracted skyline region of science image', fontsize=15, pad=15)
+    plt.plot(fibre_idx, mean_resid, color='black', alpha=0.3, label='mean')
+    plt.plot(fibre_idx, median_resid, color='red', alpha=0.7, label='median')
+    plt.axhline(0, color='grey', linestyle='--', alpha=0.4)
+    plt.ylim(-0.06, 0.06)
+    plt.xlabel('fiber #', fontsize=12, labelpad=15)
+    plt.ylabel('avg sky-subtracted pixel', fontsize=12, labelpad=15)
+    plt.legend(fontsize=12)
+    # Set png file
+    plot_dir = os.path.join(work['output']['dir'],'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_residual_sky_vs_fiber_threshold_0.5.png'.format(work['file'])
+    # Add output directory path to png file
+    filepath = os.path.join(plot_dir, png_file)
+    # Save plot as png
+    plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
+    plt.close()
+
+    return
 
 
 # ---------------------------------------------------------------------------- #
