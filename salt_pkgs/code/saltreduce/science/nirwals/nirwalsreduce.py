@@ -969,15 +969,14 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
         traces, work['good_pixels'], fibre_type='obj')
 
     # Fit and subtract continuum
-    cf_image, cs_image = fit_and_subtract_continuum_for_image(
-        'sci', image, work, log)
+    cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log)
     # Write new fits file: continuum fit
     write_new_fits(hdu, cf_image, None, '', 'cf', work, log)
     # Write new fits file: continuum subtracted
     write_new_fits(hdu, cs_image, None, '', 'cs', work, log)
 
     # Fit spectral channels
-    sf_image = fit_spectral_channels(cs_image, work, log, gpcnt_image=gpcnt_image)  # DEBUG added gpcnt_image as a param for diagnostic plotting
+    sf_image = fit_spectral_channels(cs_image, work, log)
     # Write new fits file: spectral channels fit
     write_new_fits(hdu, sf_image, None, '', 'sf', work, log)
 
@@ -1570,7 +1569,7 @@ def fit_and_subtract_continuum_for_fibre(key, id, work, log):
     return farr
 
 # ---------------------------------------------------------------------------- #
-def fit_and_subtract_continuum_for_image(key, image, work, log):
+def fit_and_subtract_continuum_for_image(hdu, key, image, work, log):
 # ---------------------------------------------------------------------------- #
 
     # Add message to log
@@ -1587,6 +1586,16 @@ def fit_and_subtract_continuum_for_image(key, image, work, log):
     mask = np.ones((rows, cols), dtype=bool)
     # Set 'x' (wavelength) array
     xarr = work['we']
+    # masking out strong skyline regions before continuum fitting
+    skyline_image_mask = set_skyline_mask(hdu, work, log, sf_image=None)
+    # if no sky exposures found, no masking
+    if skyline_image_mask is None:
+        skyline_col = np.ones(cols, dtype=bool)
+    else:
+        # collapse skyline into 1D array and broadcast back to 2D dimension of image
+        # this avoids the dimension mismatch of 'a' and input image and follows the logic that this should mostly be row (fiber) independent
+        skyline_col = skyline_image_mask.mean(axis=0) >= 0.5   # only masking columns that at least 50% of fibers agree are skyline dominated
+    skyline_image_mask = np.broadcast_to(skyline_col, (rows, cols))
 
     # Loop for image rows...
     for i in range(rows):
@@ -1594,44 +1603,43 @@ def fit_and_subtract_continuum_for_image(key, image, work, log):
         # Set 'y' (row flux) array
         yarr = image[i, :].copy()
         # Set mask to exclude 'empty' curved edges of image
-        mask = set_curve_mask_for_row(mask, i, yarr, work)
-        # Set mask for row
-        rm = mask[i, :]
+        edges_image_mask = set_curve_mask_for_row(mask, i, yarr, work)
+
+        edges_row_mask = edges_image_mask[i,:]       # mask to be applied during and after continuum fitting
+        skyline_row_mask = skyline_image_mask[i, :]  # mask to be applied during continuum fitting
+
+        # set masks for continuum fitting (1D version for fitting and 2D version for plotting)
+        image_fit_mask = edges_image_mask & skyline_image_mask
+        row_fit_mask = edges_row_mask & skyline_row_mask
+
         # Fit continuum
-        cf = fit_continuum(key, 'row', i + 1, xarr, yarr, rm, work, log)
-        
-        #### DEBUGGING ####
-        # # Set continuum fit in continuum fit image array
-        # cf_image[i][rm] = cf(xarr)[rm]
-        # # Set row flux minus continuum fit in continuum subtracted image array
-        # cs_image[i][rm] = yarr[rm] - cf(xarr)[rm]
+        cf = fit_continuum(key, 'row', i + 1, xarr, yarr, row_fit_mask, work, log)
+
+        # if unable to dertermine continuum with skylines masked, try again with just edge mask
+        if cf is None:
+            cf = fit_continuum(key, 'row', i + 1, xarr, yarr, edges_row_mask, work, log)
+        # if it still fails ...
+        if cf is None:
+            continue
 
         # Evaluate continuum fit
         cf_vals = cf(xarr)
         # If fit failed on a fibre (with few good pixels), replace NaN or Inf values with zeros
-        if not np.all(np.isfinite(cf_vals[rm])):
+        if not np.all(np.isfinite(cf_vals[edges_row_mask])):
             cf_vals = np.zeros_like(cf_vals)
         # Set continuum fit in continuum fit image array
-        cf_image[i][rm] = cf_vals[rm]
-        # Set row flux minus continuum fit in continuum subtracted image array
-        cs_image[i][rm] = yarr[rm] - cf_vals[rm]
-        ####################
+        cf_image[i][edges_row_mask] = cf_vals[edges_row_mask]
+         # Set row flux minus continuum fit in continuum subtracted image array
+        cs_image[i][edges_row_mask] = yarr[edges_row_mask] - cf_vals[edges_row_mask]
 
-    # Set mask in work dictionary
-    work['image_mask'] = mask
+    # Set mask in work dictionary (ignore edges throughout the rest of the reduction, but keep skyline regions)
+    work['image_mask'] = edges_image_mask
 
-    # same plotting as in below commented out block ...
-    image_mask_diagnostic_plot(work, xarr, mask)
-####>
-    # plt.figure(1, figsize=(16, 9), tight_layout=True)
-    # ext = (xarr.min(), xarr.max(), 0, mask.shape[0])
-    # plt.imshow(mask, extent=ext, origin='lower', aspect='auto', cmap='plasma')
-    # plt.show()
-    # plt.close()
-    # stop()
-####<
+    # visualize this mask
+    continuum_fit_mask_diagnostic_plot(work, xarr, image_fit_mask)
+
     return cf_image, cs_image
-
+    
 # ---------------------------------------------------------------------------- #
 def fit_continuum(key, tag, id, xarr, yarr, mask, work, log):
 # ---------------------------------------------------------------------------- #
@@ -1644,16 +1652,28 @@ def fit_continuum(key, tag, id, xarr, yarr, mask, work, log):
     else:
         ysig = yarr
 
-    # Fit continuum
-    cf = Fit1D(xarr[mask], ysig[mask], **work['continuum'][key]['fit'])
+    # check if there are enough points to constrain the fit
+    npts = int(np.count_nonzero(mask))
+    min_pts = work['continuum'][key].get('min_points', 12)   # >= (fit order + 1), with margin
+    if npts < min_pts:
+        log.message('   - {0} {1}: only {2} unmasked points; skipping'.format(tag, id, npts),
+                    with_header=False)
+        return None
+
+    try:
+        # Fit continuum
+        cf = Fit1D(xarr[mask], ysig[mask], **work['continuum'][key]['fit'])
+    except SALTError:
+        log.message('   - {0} {1}: continuum fit failed (SVD); skipping'.format(tag, id),
+                    with_header=False)
+        return None
+
     # Plot continuum fit (if needed)
     plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, work, log)
-
     return cf
 
 # ---------------------------------------------------------------------------- #
-def fit_spectral_channels(image, work, log, gpcnt_image=None):
-    # DEBUG added gpcnt_image as a param for diagnostic plotting
+def fit_spectral_channels(image, work, log):
 # ---------------------------------------------------------------------------- #
 
     # Add message to log
@@ -1714,12 +1734,12 @@ def fit_spectral_channels(image, work, log, gpcnt_image=None):
     return sf_image
 
 
-# TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
-def image_mask_diagnostic_plot(work, xarr, mask):
+def continuum_fit_mask_diagnostic_plot(work, xarr, mask):
 # ---------------------------------------------------------------------------- #
     '''
-    plotting the image mask, which masks out zero flux pixels on the edges of the rectified image
+    plotting the mask used during continuum fitting.
+    Masks out zero flux pixels on the edges of the rectified image and strong skyline regions.
     '''
     plt.figure(1, figsize=(16, 9), tight_layout=True)
     ext = (xarr.min(), xarr.max(), 0, mask.shape[0])
@@ -1731,7 +1751,7 @@ def image_mask_diagnostic_plot(work, xarr, mask):
     # Set png file
     plot_dir = os.path.join(work['output']['dir'],'plots')
     os.makedirs(plot_dir, exist_ok=True)
-    png_file = '{0}_image_mask.png'.format(work['file'])
+    png_file = '{0}_continuum_fit_mask.png'.format(work['file'])
     # Add output directory path to png file
     filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
@@ -1741,7 +1761,6 @@ def image_mask_diagnostic_plot(work, xarr, mask):
     return
 
 
-# TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
 def spec_channel_fit_diagnostic_plot(work, input_flux, fit_flux, mask, col):
 # ---------------------------------------------------------------------------- #
@@ -1883,38 +1902,19 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # Set object to sky spectral channels fit ratio
     rat_sf_image[nz] = sci_sf_image[nz] / sky_sf_image[nz]     # fiber- and wavelength-dependent scaling of sky emission in obj and sky frames
     rat_sf_image_masked = np.where(nz, rat_sf_image, np.nan)   # set zeros to NaNs
-    col_med = np.nanmedian(rat_sf_image_masked, axis=0)        # median over fibres
+    col_med = np.nanmedian(rat_sf_image_masked, axis=0)        # median over fibres to remove fiber-dependence
     col_med[np.isnan(col_med)] = 1.0                           # set NaNs to unity
     # Broadcast back onto a 2D image
     rat_sf_image = col_med * np.ones((rat_sf_image.shape[0], rat_sf_image.shape[1]), dtype=np.float32)  # wavelength-dependent scaling of sky emission in obj and sky frames
 
-    # Initialise gpm image array (copy of sky spectral channels fit)
-    gpm_image = sky_sf_image.copy()
-    # Set gpm threshold dictionary for masking sky spectral channels fit
-    gpm_thresh = work['spectral_channels']['gpm']['threshold']
-
-    # Check if threshold type for masking is 'auto'
-    if gpm_thresh['type'] == 'auto':
-        # Clip sky spectral channels fit
-        tmp = sigma_clip(sky_sf_image, **gpm_thresh['auto']['sigma_clip'])
-        # Set threshold: stddev of sigma clipped sky spectral channels fit
-        thresh = gpm_thresh['auto']['scale'] * np.std(tmp)
-
-    # .. else check if threshold type for masking is 'value'
-    elif gpm_thresh['type'] == 'value':
-        # Set threshold value
-        thresh = gpm_thresh['value']
-
-    # masking out interline regions (currently, thresh=0.1)
-    # Set zeros
-    gpm_image[sky_sf_image <= thresh] = 0.
-    # Set ones
-    gpm_image[sky_sf_image > thresh] = 1.
+    skyline_image_mask = set_skyline_mask(hdu, work, log, sf_image=sky_sf_image)  # using sky exposure sky-fit to generate mask
+    # mask for excluding interline regions, set to ones and zeros
+    interline_image_mask = (~skyline_image_mask).astype(np.float32) 
 
     # Clean object continuum subtracted image
-    sci_cs_2d = gpm_image * sci_cs_image        # interline regions set to 0, in obj cs image 
+    sci_cs_2d = interline_image_mask * sci_cs_image        # interline regions set to 0, in obj cs image 
     # Clean sky continuum subtracted image
-    sky_cs_2d = gpm_image * sky_cs_image        # interline regions set to 0, in sky cs image
+    sky_cs_2d = interline_image_mask * sky_cs_image        # interline regions set to 0, in sky cs image
     # Collapse object continuum subtracted image
     sci_cs_1d = np.sum(sci_cs_2d, axis=1)       # summing up spectral axis across fibers: (n columns, 1)
     # Some numpy voodoo... set n rows, 1 column
@@ -1941,7 +1941,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # Combine normalised wavelength and position scalings
     scaling_image = rat_sf_image * rat_cs_2d_norm    # combining wavelength-dependent and fiber-dependent ratios
     # Clean interline regions  
-    scaling_image_masked = scaling_image * gpm_image # interline regions set to 0
+    scaling_image_masked = scaling_image * interline_image_mask # interline regions set to 0
     # Set interline regions to unity   
     scaling_image_masked[scaling_image_masked < 1e-2] = 1.   # interline regions (value of zero) and negative sky-scaling factors do not contribute to later scaling (factor=1)
 
@@ -1950,12 +1950,12 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     # Subtract scaled image from object continuum subtracted image
     sci_image = sci_cs_image - sky_scaled
 
-    sky_line_scaling_plots(work, rat_sf_image, rat_cs_2d_norm, gpm_image, sci_cs_image, sky_cs_image, scaling_image_masked, sky_scaled)
+    sky_line_scaling_plots(work, rat_sf_image, rat_cs_2d_norm, interline_image_mask, sci_cs_image, sky_cs_image, scaling_image_masked, sky_scaled)
 
     # Add continuum back in
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image)
 
-    skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=gpm_image)
+    skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask)
 
     # Add sky subtracted header key
     value = time.asctime(time.localtime())
@@ -1965,7 +1965,6 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     return sci_image, sci_image_with_cont
 
 
-# TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
 def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum_arr):
 # ---------------------------------------------------------------------------- #
@@ -2013,7 +2012,7 @@ def sky_line_scaling_plots(work, rat_sf_image, rat_cs_2d_norm, gpm_image, sci_cs
          Normalised object-to-sky continuum-subtracted ratio, i.e., the fiber-dependent scaling.
         Also showing the number of good pixels per fiber.
 
-      3. {file}_skyline_scaling_before_after.png
+      3. {file}_sky_subtraction.png
          Sky before scaling (sky_cs_image), the scale-factor (scaling_image_masked), and the sky after scaling (sky_scaled).
     '''
     import matplotlib as mpl
@@ -2154,157 +2153,13 @@ def sky_line_scaling_plots(work, rat_sf_image, rat_cs_2d_norm, gpm_image, sci_cs
     axs[3].set_xlabel('spectral channel', fontsize=12, labelpad=12)
     colorbar_axis(axs[3], im3, label='counts')
 
-    fig.savefig(stub + '_skyline_scaling_before_after.png', dpi=180, format='png', bbox_inches='tight')
+    fig.savefig(stub + '_sky_subtraction.png', dpi=180, format='png', bbox_inches='tight')
     plt.close(fig)
 
     return
 
-    # # Image dimensions and pixel-index axes
-    # n_fibre, n_chan = rat_sf_image.shape
-    # fibre_idx = np.arange(n_fibre)
-    # chan_idx = np.arange(n_chan)
-
-    # # Good-pixel counts collapsed along each dimension
-    # n_gpm_per_chan = gpm_image.sum(axis=0)     # per spectral channel (max = n_fibre)
-    # n_gpm_per_fibre = gpm_image.sum(axis=1)    # per fiber            (max = n_chan)
-
-    # # Output directory / filename stub (same pattern as the other plots)
-    # plot_dir = os.path.join(work['output']['dir'], 'plots')
-    # os.makedirs(plot_dir, exist_ok=True)
-    # stub = os.path.join(plot_dir, work['file'])
-
-    # # Helper: give every panel its own colorbar axis so stacked panels keep an
-    # # identical width (line panels get an invisible cax; image panels a real one)
-    # def colorbar_axis(ax, mappable=None, label=None):
-    #     cax = make_axes_locatable(ax).append_axes('right', size='2.5%', pad=0.1)
-    #     if mappable is None:
-    #         cax.axis('off')
-    #     else:
-    #         cb = plt.colorbar(mappable, cax=cax)
-    #         if label:
-    #             cb.set_label(label, fontsize=10)
-    #     return cax
-
-    # # ------------------------------------------------------------------ #
-    # # 1) wavelength-dependent scaling (rat_sf_image)
-    # # ------------------------------------------------------------------ #
-    # rat_sf_image_skylines = rat_sf_image * gpm_image          # set skyline region scale factors to 0
-    # rat_sf_image_skylines[rat_sf_image_skylines < 1e-2] = np.nan  # set skyline region scale factors to 1
-
-    # # colorbar limits
-    # v0, v1 = np.nanpercentile(rat_sf_image_skylines, [2, 98]) 
-
-    # # median trend (removing fiber dependence !)
-    # rat_sf_masked = np.ma.masked_where(gpm_image <= 0, rat_sf_image)
-    # rat_sf_trend = np.ma.median(rat_sf_masked, axis=0).filled(np.nan)
-
-    # fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [3, 1]})
-
-    # # 2D scale-factor image
-    # im = axs[0].imshow(rat_sf_image_skylines , origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=v0, vmax=v1, cmap='magma')
-    # axs[0].set_ylabel('fiber #', fontsize=12, labelpad=10)
-    # axs[0].set_title('wavelength-dependent sky-line scaling \n(rat_sf = sci_sf / sky_sf)', fontsize=14, pad=15)
-    # colorbar_axis(axs[0], im, label='scale factor')
-
-    # # Median trend vs spectral channel
-    # axs[1].scatter(chan_idx, rat_sf_trend, s=2, color='black', alpha=0.5)
-    # axs[1].axhline(1.0, color='r', lw=0.8, ls='--')
-    # axs[1].set_ylabel('median\nscale factor', fontsize=11, labelpad=10)
-    # axs[1].set_ylim(0, 2.5)
-    # axs[1].set_xlim(0, n_chan)
-    # colorbar_axis(axs[1])
-
-    # fig.savefig(stub + '_skyline_scaling_wavelength.png', dpi=180, format='png', bbox_inches='tight')
-    # plt.close(fig)
-
-    # # ------------------------------------------------------------------ #
-    # # 2) fiber-dependent scaling (normalised obj-to-sky ratio)
-    # # ------------------------------------------------------------------ #
-
-    # # rat_cs_2d_norm is constant along the spectral axis -> recover the 1D curve
-    # rat_cs_1d_norm = rat_cs_2d_norm[:, 0]
-
-    # fig, axs = plt.subplots(2, 1, figsize=(8, 4), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [4, 1]})
-
-    # axs[0].plot(fibre_idx, rat_cs_1d_norm, lw=1.2, color='k')
-    # axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
-    # axs[0].set_ylabel('normalised obj/sky', fontsize=12, labelpad=10)
-    # axs[0].set_title('fiber-dependent sky-line scaling',fontsize=14, pad=15)
-
-    # axs[1].fill_between(fibre_idx, 0, n_gpm_per_fibre, step='mid', color='grey', alpha=0.3)
-    # axs[1].set_ylabel('# good pixels', fontsize=11, labelpad=10)
-    # axs[1].set_xlabel('fiber #', fontsize=12, labelpad=12)
-    # axs[1].set_xlim(0, n_fibre - 1)
-
-    # fig.savefig(stub + '_skyline_scaling_fiber.png', dpi=180, format='png', bbox_inches='tight')
-    # plt.close(fig)
-
-    # # ------------------------------------------------------------------ #
-    # # 3) sky-line image before / after scaling
-    # # ------------------------------------------------------------------ #
-
-    # # Shared flux limits (from the 'before' image) so before/after are comparable
-    # f0, f1 = np.nanpercentile(sky_cs_image, [2, 99])
-
-    # # # Symmetric limits about unity for the scale-factor image
-    # # sgood = scaling_image_masked[gpm_image > 0]
-    # # if sgood.size == 0:
-    # #     sgood = scaling_image_masked.ravel()
-    # # slo, shi = np.nanpercentile(sgood, [2, 98])
-    # # shalf = max(abs(1.0 - slo), abs(shi - 1.0), 1e-3)
-    # # s0 = 1.0 - shalf  # quantile
-    # # s1 = 1.0 + shalf  # ''
-
-    # scaling_image_masked[scaling_image_masked < 1e-2] = np.nan  # set skyline region scale factors to NaN
-
-    # # colorbar limits
-    # v0, v1 = np.nanpercentile(scaling_image_masked, [2, 98]) 
-
-    # fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
-
-    # # Before
-    # im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap='magma')
-    # axs[0].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    # axs[0].set_title('sky continuum-subtracted image  (before scaling)', fontsize=12)
-    # colorbar_axis(axs[0], im0, label='counts')
-
-    # # Applied scale factor
-    # im1 = axs[1].imshow(scaling_image_masked, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=v0, vmax=v1, cmap='magma')
-    # axs[1].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    # axs[1].set_title('applied scale-factor image  (scaling_image_masked)', fontsize=12)
-    # colorbar_axis(axs[1], im1, label='scale factor')
-
-    # # compute sky subtraction results
-    # sci_image_unscaled_sub = sci_cs_image - sky_cs_image
-    # sci_image_scaled_sub = sci_cs_image - sky_scaled
-
-    # r0, r1 = np.nanpercentile(np.abs(np.concatenate([sci_image_unscaled_sub.ravel(), sci_image_scaled_sub.ravel()])), [1, 95])
-    # # r0, r1 = -r, r
-
-    # im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
-    # axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    # axs[2].set_title('unscaled sky-sub science (sci_cs_image - sky_cs_image)', fontsize=12)
-    # colorbar_axis(axs[2], im2, label='counts')
-
-    # im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
-    # axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    # axs[3].set_title('scaled sky-sub science (sci_cs_image - sky_scaled)', fontsize=12)
-    # colorbar_axis(axs[3], im3, label='counts')
-
-    # # # After
-    # # im2 = axs[2].imshow(sky_scaled, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap='magma')
-    # # axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    # # axs[2].set_title('sky-line image  (after scaling: sky_cs * scaling)', fontsize=12)
-    # # axs[2].set_xlabel('spectral channel', fontsize=12, labelpad=12)
-    # # colorbar_axis(axs[2], im2, label='flux')
-
-    # fig.savefig(stub + '_skyline_scaling_before_after.png', dpi=180, format='png', bbox_inches='tight')
-    # plt.close(fig)
-
-    # return
 
 
-# TEST DIAGNOSTIC PLOT
 # ---------------------------------------------------------------------------- #
 def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask):
 # ---------------------------------------------------------------------------- #
@@ -2374,6 +2229,90 @@ def set_curve_mask(image, work):
     work['image_mask'] = mask
 
     return
+
+
+# ---------------------------------------------------------------------------- #
+def set_skyline_mask(hdu, work, log, sf_image=None):
+# ---------------------------------------------------------------------------- #
+    '''
+    Generate a 2D mask for strong skyline regions. 
+
+    For continuum fitting, uses wavelength-calibrated sky exposure ('a') to compute the mask.
+
+    For sky subtraction, uses sky exposure sky-fit ('sf') to compute the mask.
+    '''
+    # if no sky-fit image is provided, use the wavelength-calibrated sky exposure from hdu
+    if sf_image is None:
+        # Set target name (OBJECT)
+        trg_name = hdu[PRIMARY].header['OBJECT']
+
+        # Check sky exposures
+        if 'sky' not in work['exposures'].keys():
+            # Add message to log
+            msg = '   - no sky images!'
+            log.message(msg, with_header=False)
+            # Get outa here!
+            return None
+
+        # Check sky continuum fit image
+        if work['wrk_config'] not in work['exposures']['sky'].keys():
+            # Add message to log
+            msg = '   - {0}: sky image not found!'.format(work['wrk_config'])
+            log.message(msg, with_header=False)
+            # Get outa here!
+            return None
+
+        # Initialise sky image
+        sky_a_image = None
+
+        # Loop for sky continuum fit entries...
+        for sky_a in work['exposures']['sky'][work['wrk_config']]['a']:
+
+            # Open sky continuum fit image file
+            with fits.open(sky_a['file'], mode='readonly') as skyhdu:
+
+                # Check target name of sky continuum fit image file
+                if skyhdu[PRIMARY].header['OBJECT'] == trg_name:
+                    # Set sky continuum fit image
+                    sky_a_image = skyhdu[SCI].data.copy()
+                    break
+
+        # Check sky image
+        if sky_a_image is None:
+            # Add message to log
+            msg = ('   - {0}: sky wavelength-calibrated image not found!').format(work['wrk_config'])
+            log.message(msg, with_header=False)
+            # Get outa here!
+            return None
+        # set sky image to use for mask
+        sky_image = sky_a_image.copy()
+        # Set gpm threshold dictionary for masking sky spectral channels fit
+        sky_thresh = work['continuum']['gpm']['threshold']
+
+    else:
+        # set sky image to use for mask
+        sky_image = sf_image.copy()
+        # Set gpm threshold dictionary for masking sky spectral channels fit
+        sky_thresh = work['spectral_channels']['gpm']['threshold']
+
+    # Check if threshold type for masking is 'auto'
+    if sky_thresh['type'] == 'auto':
+        # Clip sky spectral channels fit
+        tmp = sigma_clip(sky_image, **sky_thresh['auto']['sigma_clip'])
+        center = np.ma.median(tmp)   # continuum baseline
+        stdev = np.std(tmp)
+        # Set threshold: stddev from sigma clipped continuum
+        thresh = center + sky_thresh['auto']['scale'] * stdev
+
+    # .. else check if threshold type for masking is 'value'
+    elif sky_thresh['type'] == 'value':
+        # Set threshold value
+        thresh = sky_thresh['value']
+
+    # masking out strong skyline regions
+    skyline_mask = (sky_image <= thresh)  # if on skyline false, else (interline regions) true
+    return skyline_mask
+
 
 # ---------------------------------------------------------------------------- #
 def set_curve_mask_for_row(mask, i, farr, work):
