@@ -188,7 +188,7 @@
         },
         "sci": {
             "sigma_clip": {},
-            "fit": {"function": "legendre", "order": 11, "low_reject": 3, "high_reject": 2, "niter": 10},
+            "fit": {"function": "legendre", "order": 7, "low_reject": 3, "high_reject": 2, "niter": 10},
             "notes": [
                 "a. row masking is done for the determined row mask which takes into account the curvature of the rectification;",
                 "b. all row masks constitute 'image_mask' which is used to mask columns in spectral channels fit"
@@ -203,7 +203,7 @@
                         "c. if 'auto': thresh = median(sky_clipped) + scale * stddev(sky_clipped);",
                         "d. keep (fit) where sky <= thresh; mask strong skylines above it"
                     ],
-                    "auto": {"sigma_clip": {"sigma": 1.5, "cenfunc": "median"}, "scale": 1.0, "median_filt_window_size": 151},
+                    "auto": {"sigma_clip": {"sigma": 1.0, "cenfunc": "median"}, "scale": 1.0, "median_filt_window_size": 601},
                     "value": 2.0
                 }
             }
