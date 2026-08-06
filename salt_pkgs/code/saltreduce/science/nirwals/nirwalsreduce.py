@@ -2297,12 +2297,14 @@ def set_skyline_mask(hdu, work, log, sf_image=None):
 
     # Check if threshold type for masking is 'auto'
     if sky_thresh['type'] == 'auto':
+        # use broad filtering of spectra to estimate continuum level
+        median_filt_window_size = sky_thresh['auto']['median_filt_window_size']
+        continuum_baseline = median_filter(sky_image, size=(1, median_filt_window_size), mode='nearest')
         # Clip sky spectral channels fit
         tmp = sigma_clip(sky_image, **sky_thresh['auto']['sigma_clip'])
-        center = np.ma.median(tmp)   # continuum baseline
         stdev = np.std(tmp)
         # Set threshold: stddev from sigma clipped continuum
-        thresh = center + sky_thresh['auto']['scale'] * stdev
+        thresh = continuum_baseline + sky_thresh['auto']['scale'] * stdev
 
     # .. else check if threshold type for masking is 'value'
     elif sky_thresh['type'] == 'value':

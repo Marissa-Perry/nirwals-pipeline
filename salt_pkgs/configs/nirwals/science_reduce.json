@@ -203,7 +203,7 @@
                         "c. if 'auto': thresh = median(sky_clipped) + scale * stddev(sky_clipped);",
                         "d. keep (fit) where sky <= thresh; mask strong skylines above it"
                     ],
-                    "auto": {"sigma_clip": {"sigma": 1.5, "cenfunc": "median"}, "scale": 1.0},
+                    "auto": {"sigma_clip": {"sigma": 1.5, "cenfunc": "median"}, "scale": 1.0, "median_filt_window_size": 151},
                     "value": 2.0
                 }
             }
