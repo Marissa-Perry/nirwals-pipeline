@@ -1592,9 +1592,10 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log):
     if skyline_image_mask is None:
         skyline_col = np.ones(cols, dtype=bool)
     else:
+        fiber_frac = work['continuum']['gpm']['threshold']['fiber_frac']  # only masking columns that at least some percentage of fibers agree are skyline dominated
         # collapse skyline into 1D array and broadcast back to 2D dimension of image
         # this avoids the dimension mismatch of 'a' and input image and follows the logic that this should mostly be row (fiber) independent
-        skyline_col = skyline_image_mask.mean(axis=0) >= 0.5   # only masking columns that at least 50% of fibers agree are skyline dominated
+        skyline_col = skyline_image_mask.mean(axis=0) >= fiber_frac
     skyline_image_mask = np.broadcast_to(skyline_col, (rows, cols))
 
     # Loop for image rows...

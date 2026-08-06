@@ -188,7 +188,7 @@
         },
         "sci": {
             "sigma_clip": {},
-            "fit": {"function": "legendre", "order": 7, "low_reject": 3, "high_reject": 2, "niter": 10},
+            "fit": {"function": "legendre", "order": 8, "low_reject": 3, "high_reject": 2, "niter": 10},
             "notes": [
                 "a. row masking is done for the determined row mask which takes into account the curvature of the rectification;",
                 "b. all row masks constitute 'image_mask' which is used to mask columns in spectral channels fit"
@@ -201,10 +201,12 @@
                         "a. type: 'auto' | 'value';",
                         "b. skyline mask for the continuum fit is built from the raw wavelength-calibrated sky ('a'), which still contains the sky continuum.;",
                         "c. if 'auto': thresh = median(sky_clipped) + scale * stddev(sky_clipped);",
-                        "d. keep (fit) where sky <= thresh; mask strong skylines above it"
+                        "d. keep (fit) where sky <= thresh; mask strong skylines above it",
+                        "e. fraction of fibers to union together into a final skyline mask"
                     ],
                     "auto": {"sigma_clip": {"sigma": 1.0, "cenfunc": "median"}, "scale": 1.0, "median_filt_window_size": 601},
-                    "value": 2.0
+                    "value": 2.0,
+                    "fiber_frac": 0.25
                 }
             }
         },
