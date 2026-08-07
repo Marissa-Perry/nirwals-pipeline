@@ -157,6 +157,11 @@
     "smooth": {
         "arc": {"window_length": 5, "polyorder": 3}
     },
+    "resolution":{
+        "height": 1000.0,
+        "window": 13,
+        "order": 2
+    },
 
     "dark": {
         "subtract": true,

@@ -19,6 +19,7 @@ import numpy as np
 from scipy.signal import find_peaks
 from scipy.signal import savgol_filter
 from scipy.ndimage import median_filter
+from scipy.optimize import curve_fit
 # astropy imports
 from astropy.io import fits
 from astropy.stats import sigma_clip, mad_std
@@ -75,6 +76,8 @@ BPM = 'BPM'
 FIT = 'FIT'
 # Good pixel count fits extension
 GPCNT = 'GPCNT'
+# Spectral resolution fits extension
+SPECRES = 'SPECRES'
 # Observation log file
 OBSLOG = '{0}{1}OBSLOG.fits'
 # Observation date format for SALT data archive directory
@@ -893,6 +896,15 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     fibre_image = stack_fibre_image(traces, fibres)
     # Stack good pixels count image: fibre type 'all'
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
+
+    # Compute spectral resolution from the rectified arc image
+    log.message(' - computing spectral resolution', with_header=False)
+    res = compute_spectral_resolution(fibre_image, work, log)
+    if res is not None:
+        # Attach to the wavelength solution so it's dumped with the solution
+        ws['resolution'] = {k: v for k, v in res.items() if k != 'R'}  # don't use resolution arrays in JSON
+        work['resolution_fit'] = res  # use resolution arrays for HDU
+
     # Add rectified (wavelength calibrated) header key
     value = time.asctime(time.localtime())
     comment = 'Image has been wavelength calibrated'
@@ -920,6 +932,9 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
         log.message(msg, with_header=False)
         # Get outa here!
         return
+
+    if ws.get('resolution') is not None:
+        work['resolution_fit'] = ws['resolution']
 
     # Set wavelength fit
     wf, w = set_wavelength_fit(ws, work, log)
@@ -2419,6 +2434,27 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log):
         # Add new science extension to new hdu
         hdu_new.append(hdu_sci)
 
+    # Append spectral resolution extension (if available)
+    res = work.get('resolution_fit')
+    if res is not None:
+        # Evaluate R(lambda) on the product wavelength grid
+        if 'R' in res:
+            R_model = np.asarray(res['R'], dtype=np.float32)
+        else:
+            R_model = evaluate_resolution(res, work['we']).astype(np.float32)
+        # Create resolution hdu
+        hdu_res = fits.ImageHDU(data=R_model, name=SPECRES)
+        set_header_items(hdu_res.header, work)
+        hdu_res.header['ROW0'] = ('median', 'Row 0: median R across fibres')
+        hdu_res.header['ROW1'] = ('p16', 'Row 1: 16th percentile R')
+        hdu_res.header['ROW2'] = ('p84', 'Row 2: 84th percentile R')
+        hdu_res.header['CRPIX1'] = (1, 'Reference pixel')
+        hdu_res.header['CRVAL1'] = (work['w1'], 'Wavelength at reference pixel')
+        hdu_res.header['CDELT1'] = (work['dw'], 'Wavelength dispersion per pixel')
+        hdu_res.header['EXTNAME'] = (SPECRES, 'Extension name')
+        write_resolution_header(hdu_res.header, res)
+        hdu_new.append(hdu_res)
+
     # Create new fits
     hdu = fits.HDUList(hdus=hdu_new)
     # Check tag
@@ -2743,6 +2779,167 @@ def centroid(parr, farr, guess=None, diff=None, kern=KERN, mode='same'):
     c = np.interp(0, carr[cmask], parr[mask][cmask])
 
     return c
+
+# ---------------------------------------------------------------------------- #
+def gaussian_1d(x, amplitude, mean, sigma, continuum=0.0):
+# ---------------------------------------------------------------------------- #
+    '''
+    1D Gaussian with optional constant continuum, for line-profile fitting.
+    '''
+    return amplitude * np.exp(-(x - mean)**2 / (2 * sigma**2)) + continuum
+
+# ---------------------------------------------------------------------------- #
+def fit_arc_lines(waves, flux, height=1000.0, win=13, max_sig_err=0.25):
+# ---------------------------------------------------------------------------- #
+    '''
+    Fit arc lines in one rectified fibre. 
+    '''
+    peaks, _ = find_peaks(flux, height=height, distance=win)  # initial peak guesses
+    lam, fwhm, fwhm_err = [], [], []
+    for pk in peaks:
+        # define a window around peak
+        lo = pk - win
+        hi = pk + win + 1 
+        # initial guesses for the fit
+        p0 = [flux[pk], waves[pk], 2 * (waves[1] - waves[0]), 0.0]
+        try:
+            (a, x0, sigma, continuum), pcov = curve_fit(gaussian_1d, waves[lo:hi], flux[lo:hi], p0=p0)
+        # failed to converge, skip peak
+        except RuntimeError:
+            continue
+
+        # compute error on fit
+        perr = np.sqrt(np.diag(pcov))
+        sigma_err = perr[2]
+        # if fit is unconstrained, skip peak
+        if not np.all(np.isfinite(perr)): 
+            continue
+        # if width of peak is poorly constrained, skip peak
+        if sigma_err / abs(sigma) > max_sig_err: 
+            continue
+
+        # compute the FWHM of peak
+        fwhm.append(2.3548 * abs(sigma))
+        fwhm_err.append(2.3548 * sigma_err)
+        # central wavelength
+        lam.append(x0)
+    return np.array(lam), np.array(fwhm), np.array(fwhm_err)
+
+
+# ---------------------------------------------------------------------------- #
+def fit_fwhm_polynomial(lam, fwhm, fwhm_err, deg=2, nclip=3):
+# ---------------------------------------------------------------------------- #
+    '''
+    Weighted, sigma-clipped polynomial fit to FWHM(lambda). Returns coeffs.
+    '''
+    order = np.argsort(lam)
+    x, y, w = lam[order], fwhm[order], 1.0 / fwhm_err[order]
+    coeff = np.polyfit(x, y, deg, w=w)
+    for _ in range(nclip):
+        resid = y - np.polyval(coeff, x)
+        keep = np.abs(resid) < 3 * np.std(resid)
+        if keep.all() or (keep.sum() <= deg):  # stop if nothing clipped or too few data points left
+            break
+        x, y, w = x[keep], y[keep], w[keep]
+        coeff = np.polyfit(x, y, deg, w=w)
+    return coeff
+
+
+# ---------------------------------------------------------------------------- #
+def compute_spectral_resolution(fibre_image, work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    Compute spectral resolution from a rectified arc fibre image.
+    Fits arc lines per fibre, fits a smooth FWHM(lambda) polynomial per fibre, and returns the median coefficients across fibres.
+
+    fibre_image: <array>  2D rectified arc flux (n_fibres, n_cols)
+
+    return: <dict> {'coeff', 'order', 'w_min', 'w_max', 'n_fibres'} or None
+    '''
+    waves = work['we'] 
+    height = work['resolution']['height']
+    win = work['resolution']['window']
+    order = work['resolution']['order']
+
+    n_fibres = fibre_image.shape[0]
+    coeffs, lam_min, lam_max = [], [], []
+
+    for i in range(n_fibres):
+        lam, fwhm, fwhm_err = fit_arc_lines(waves, fibre_image[i], height=height, win=win)
+        if len(lam) <= order:
+            continue
+
+        try:
+            coeffs.append(fit_fwhm_polynomial(lam, fwhm, fwhm_err, deg=order))
+        except (TypeError, np.linalg.LinAlgError):
+            continue
+        
+        lam_min.append(lam.min())
+        lam_max.append(lam.max())
+
+    if not coeffs:
+        log.message('   - resolution: no fibres yielded usable arc lines!', with_header=False)
+        return None
+
+    # Median coefficients across fibres
+    coeff = np.median(np.vstack(coeffs), axis=0)
+    w_min = float(np.median(lam_min))
+    w_max = float(np.median(lam_max))
+
+    # Log the R range over the measured coverage for a sanity check
+    wmask = (waves >= w_min) & (waves <= w_max)
+    R_cov = waves[wmask] / np.polyval(coeff, waves[wmask])
+    log.message('   - resolution fibres used: {0} / {1}'.format(len(coeffs), n_fibres), with_header=False)
+    log.message('   - resolution R range: {0:.0f} - {1:.0f}'.format(R_cov.min(), R_cov.max()), with_header=False)
+    log.message('   - arc line coverage: {0:.1f} - {1:.1f}'.format(w_min, w_max), with_header=False)
+
+    # Per-fibre resolution curves
+    R_stack = np.vstack([waves / np.polyval(c, waves) for c in coeffs])
+
+    R_dict = {'coeff': coeff.tolist(), 
+              'order': int(order),
+              'w_min': w_min, 
+              'w_max': w_max, 
+              'n_fibres': len(coeffs),
+              'R': np.vstack([np.nanmedian(R_stack, axis=0),
+                              np.nanpercentile(R_stack, 16, axis=0),
+                              np.nanpercentile(R_stack, 84, axis=0)])}
+
+    return R_dict
+
+# ---------------------------------------------------------------------------- #
+def evaluate_resolution(res, waves):
+# ---------------------------------------------------------------------------- #
+    '''
+    Reconstruct resolution on a grid from stored FWHM polynomial coefficients.
+    '''
+    fwhm_model = np.polyval(np.array(res['coeff']), np.asarray(waves))
+    R_model = np.asarray(waves) / fwhm_model
+    return R_model
+
+# ---------------------------------------------------------------------------- #
+def write_resolution_header(header, res):
+# ---------------------------------------------------------------------------- #
+    '''
+    Write spectral-resolution results and parameters into a FITS header.
+    '''
+    if res is None:
+        return header
+
+    deg = res['order']
+    header['SPRESDEG'] = (deg, 'Spectral resolution FWHM poly degree')
+    header['SPRESWLO'] = (res['w_min'], 'Arc line coverage min wavelength')
+    header['SPRESWHI'] = (res['w_max'], 'Arc line coverage max wavelength')
+    header['SPRESNFB'] = (res['n_fibres'], 'Nr fibres used for resolution')
+
+    # np.polyval expects highest-order coeff first; store with explicit index
+    # so reconstruction is unambiguous. C0 = constant term.
+    coeff = res['coeff']                       # highest-order first (np.polyfit order)
+    for i, c in enumerate(coeff):
+        power = deg - i                        # coeff[0] multiplies lambda**deg
+        header['SPRESC{0}'.format(power)] = (c, 'FWHM poly coeff for lambda**{0}'.format(power))
+
+    return header
 
 # ---------------------------------------------------------------------------- #
 def plot_wavelength_fit(ws, work, log):
