@@ -1960,7 +1960,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
 
     # Add sky subtracted header key
     value = time.asctime(time.localtime())
-    comment = 'Image has been wavelength calibrated'
+    comment = 'Image has been sky subtracted'
     hdu['Primary'].header['SKYSUB'] = (value, comment)
 
     return sci_image, sci_image_with_cont
