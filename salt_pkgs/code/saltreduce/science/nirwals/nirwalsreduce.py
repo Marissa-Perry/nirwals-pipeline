@@ -2421,6 +2421,12 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log):
     # Add new science extension to new hdu
     hdu_new.append(hdu_sci)
 
+    # create wavength hdu (shared by SCI and SPECRES)
+    hdu_wave = fits.ImageHDU(data=np.asarray(work['we'], dtype=np.float32), name='WAVE')
+    hdu_wave.header['EXTNAME'] = ('WAVE', 'Extension name')
+    hdu_wave.header['BUNIT'] = ('Angstrom', 'Wavelength unit')
+    hdu_new.append(hdu_wave)
+
     # Check good pixel count image
     if gp_image is not None:
         # Create science hdu
@@ -2434,26 +2440,30 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log):
         # Add new science extension to new hdu
         hdu_new.append(hdu_sci)
 
-    # Append spectral resolution extension (if available)
+    # Spectral resolution extension: per-pixel R = lambda / FWHM on the product grid
     res = work.get('resolution_fit')
     if res is not None:
-        # Evaluate R(lambda) on the product wavelength grid
-        if 'R' in res:
-            R_model = np.asarray(res['R'], dtype=np.float32)
-        else:
-            R_model = evaluate_resolution(res, work['we']).astype(np.float32)
-        # Create resolution hdu
-        hdu_res = fits.ImageHDU(data=R_model, name=SPECRES)
-        set_header_items(hdu_res.header, work)
-        hdu_res.header['ROW0'] = ('median', 'Row 0: median R across fibres')
-        hdu_res.header['ROW1'] = ('p16', 'Row 1: 16th percentile R')
-        hdu_res.header['ROW2'] = ('p84', 'Row 2: 84th percentile R')
-        hdu_res.header['CRPIX1'] = (1, 'Reference pixel')
-        hdu_res.header['CRVAL1'] = (work['w1'], 'Wavelength at reference pixel')
-        hdu_res.header['CDELT1'] = (work['dw'], 'Wavelength dispersion per pixel')
+        R = evaluate_resolution(res, work['we'])[0].astype(np.float32)  # median resolution value across all fibers
+        hdu_res = fits.ImageHDU(data=R, name=SPECRES)
         hdu_res.header['EXTNAME'] = (SPECRES, 'Extension name')
+        hdu_res.header['BUNIT'] = ('', 'Dimensionless R = lambda / FWHM')
+        hdu_res.header['SPRESQTY'] = ('R', 'Resolving power lambda/dlambda, per pixel')
+        # copy linear WCS from SCI
+        for k in ('CRPIX1', 'CRVAL1', 'CDELT1', 'CTYPE1', 'CUNIT1'):
+            if k in hdu_sci.header:
+                hdu_res.header[k] = hdu_sci.header[k]
         write_resolution_header(hdu_res.header, res)
         hdu_new.append(hdu_res)
+
+        # per-fibre FWHM polynomial coefficients
+        coeffs = np.atleast_2d(np.asarray(res['coeffs'], dtype=np.float64))
+        hdu_res_fiber = fits.ImageHDU(data=coeffs.astype(np.float32), name='SPECRES_COEFF_PER_FIBER')
+        hdu_res_fiber.header['EXTNAME']  = ('SPECRES_COEFF_PER_FIBER', 'Per-fibre FWHM poly coeffs (nfib x deg+1)')
+        hdu_res_fiber.header['SPRESDEG'] = (res['order'], 'poly degree; cols ordered lambda**deg..0')
+        hdu_res_fiber.header['SPRESWLO'] = (res['w_min'], 'Arc coverage min wavelength')
+        hdu_res_fiber.header['SPRESWHI'] = (res['w_max'], 'Arc coverage max wavelength')
+        hdu_res_fiber.header['NFIBRES']  = (coeffs.shape[0], 'Number of fibres')
+        hdu_new.append(hdu_res_fiber)
 
     # Create new fits
     hdu = fits.HDUList(hdus=hdu_new)
@@ -2854,7 +2864,7 @@ def compute_spectral_resolution(fibre_image, work, log):
 
     fibre_image: <array>  2D rectified arc flux (n_fibres, n_cols)
 
-    return: <dict> {'coeff', 'order', 'w_min', 'w_max', 'n_fibres'} or None
+    return: <dict> {'coeffs', 'order', 'w_min', 'w_max', 'n_fibres'} or None
     '''
     waves = work['we'] 
     height = work['resolution']['height']
@@ -2873,7 +2883,7 @@ def compute_spectral_resolution(fibre_image, work, log):
             coeffs.append(fit_fwhm_polynomial(lam, fwhm, fwhm_err, deg=order))
         except (TypeError, np.linalg.LinAlgError):
             continue
-        
+
         lam_min.append(lam.min())
         lam_max.append(lam.max())
 
@@ -2881,29 +2891,20 @@ def compute_spectral_resolution(fibre_image, work, log):
         log.message('   - resolution: no fibres yielded usable arc lines!', with_header=False)
         return None
 
-    # Median coefficients across fibres
-    coeff = np.median(np.vstack(coeffs), axis=0)
+    # stack coefficients
+    coeff_stack = np.vstack(coeffs)              # (n_fibres, deg+1)
+
+    # wavelength range
     w_min = float(np.median(lam_min))
     w_max = float(np.median(lam_max))
 
-    # Log the R range over the measured coverage for a sanity check
-    wmask = (waves >= w_min) & (waves <= w_max)
-    R_cov = waves[wmask] / np.polyval(coeff, waves[wmask])
-    log.message('   - resolution fibres used: {0} / {1}'.format(len(coeffs), n_fibres), with_header=False)
-    log.message('   - resolution R range: {0:.0f} - {1:.0f}'.format(R_cov.min(), R_cov.max()), with_header=False)
-    log.message('   - arc line coverage: {0:.1f} - {1:.1f}'.format(w_min, w_max), with_header=False)
-
     # Per-fibre resolution curves
-    R_stack = np.vstack([waves / np.polyval(c, waves) for c in coeffs])
+    # R_stack = np.vstack([waves / np.polyval(c, waves) for c in coeffs])
 
-    R_dict = {'coeff': coeff.tolist(), 
+    R_dict = {'coeffs': coeff_stack.tolist(),
               'order': int(order),
-              'w_min': w_min, 
-              'w_max': w_max, 
-              'n_fibres': len(coeffs),
-              'R': np.vstack([np.nanmedian(R_stack, axis=0),
-                              np.nanpercentile(R_stack, 16, axis=0),
-                              np.nanpercentile(R_stack, 84, axis=0)])}
+              'w_min': w_min, 'w_max': w_max,
+              'n_fibres': len(coeffs)}
 
     return R_dict
 
@@ -2912,10 +2913,35 @@ def evaluate_resolution(res, waves):
 # ---------------------------------------------------------------------------- #
     '''
     Reconstruct resolution on a grid from stored FWHM polynomial coefficients.
+
+    Wavelengths outside the arc exposure wavelength coverage are interpolated
     '''
-    fwhm_model = np.polyval(np.array(res['coeff']), np.asarray(waves))
-    R_model = np.asarray(waves) / fwhm_model
-    return R_model
+    coeffs = res['coeffs']  # resolution poly fit coefficients  # (n_fibres, deg+1)
+
+    # R(lambda) for every fibre: 
+    # FWHM = polyval(c, waves)
+    # R = waves / FWHM
+    fwhm_stack = np.vstack([np.polyval(c, waves) for c in coeffs])  # (n_fibres, N)
+    R_stack = waves[None, :] / fwhm_stack
+
+    # mask wavelengths outside of the arc exposure's wavelength coverage
+    bad = (waves < res['w_min']) | (waves > res['w_max'])
+    R_stack[:, bad] = np.nan
+    R_stack[fwhm_stack <= 0] = np.nan
+
+    R = np.vstack([np.nanmedian(R_stack, axis=0),
+                   np.nanpercentile(R_stack, 16, axis=0),
+                   np.nanpercentile(R_stack, 84, axis=0)])
+
+    # interpolate over those regions
+    for k in range(R.shape[0]):
+        row = R[k]
+        good = np.isfinite(row)
+        if good.any() and not good.all():
+            row[~good] = np.interp(waves[~good], waves[good], row[good])
+        R[k] = row
+
+    return R
 
 # ---------------------------------------------------------------------------- #
 def write_resolution_header(header, res):
@@ -2932,13 +2958,11 @@ def write_resolution_header(header, res):
     header['SPRESWHI'] = (res['w_max'], 'Arc line coverage max wavelength')
     header['SPRESNFB'] = (res['n_fibres'], 'Nr fibres used for resolution')
 
-    # np.polyval expects highest-order coeff first; store with explicit index
-    # so reconstruction is unambiguous. C0 = constant term.
-    coeff = res['coeff']                       # highest-order first (np.polyfit order)
+    # median polynomial fit coefficient
+    coeff = np.median(np.atleast_2d(res['coeffs']), axis=0)
     for i, c in enumerate(coeff):
-        power = deg - i                        # coeff[0] multiplies lambda**deg
-        header['SPRESC{0}'.format(power)] = (c, 'FWHM poly coeff for lambda**{0}'.format(power))
-
+        power = deg - i
+        header[f'SPRESC{power}'] = (float(c), f'Median FWHM coeff for lambda**{power}')
     return header
 
 # ---------------------------------------------------------------------------- #
