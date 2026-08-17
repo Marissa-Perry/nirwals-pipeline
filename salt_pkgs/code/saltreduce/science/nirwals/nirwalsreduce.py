@@ -998,13 +998,14 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     # Check if exposure type is 'science'
     if work['exp_type'] == 'science':
         # Subtract sky
-        sci_image, sci_image_with_cont = subtract_sky(
-            hdu, cf_image, cs_image, sf_image, work, log)
+        sci_image, sci_image_with_cont, sky_scaled, sky_cf_image = subtract_sky(hdu, cf_image, cs_image, sf_image, work, log)
+        # saving skylines and sky continuum for product header
+        skycorr_ss = sky_scaled
+        skycorr_ssc = (sky_scaled + sky_cf_image) if (sky_scaled is not None and sky_cf_image is not None) else None
         # Write new fits file: sky subtracted without continuum
-        write_new_fits(hdu, sci_image, gpcnt_image, '', 'ss', work, log)
+        write_new_fits(hdu, sci_image, gpcnt_image, '', 'ss', work, log, skycorr=skycorr_ss)
         # Write new fits file: sky subtracted with continuum
-        write_new_fits(
-            hdu, sci_image_with_cont, gpcnt_image, '', 'ssc', work, log)
+        write_new_fits(hdu, sci_image_with_cont, gpcnt_image, '', 'ssc', work, log, skycorr=skycorr_ssc)
 
     return
 
@@ -1814,6 +1815,25 @@ def spec_channel_fit_diagnostic_plot(work, input_flux, fit_flux, mask, col):
 
 
 # ---------------------------------------------------------------------------- #
+def product_object(hdulist):
+# ---------------------------------------------------------------------------- #
+    """
+    OBJECT from OBSINFO of reduced product, (if not available, use PRIMARY).
+    """
+    names = [e.name for e in hdulist]
+    hdr = hdulist['OBSINFO'].header if 'OBSINFO' in names else hdulist[PRIMARY].header
+    return hdr['OBJECT']
+
+# ---------------------------------------------------------------------------- #
+def product_flux_data(hdulist):
+# ---------------------------------------------------------------------------- #
+    """
+    FLUX-extension data of reduced product (if not available, use SCI).
+    """
+    names = [e.name for e in hdulist]
+    return (hdulist['FLUX'] if 'FLUX' in names else hdulist[SCI]).data
+
+
 def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
 # ---------------------------------------------------------------------------- #
 
@@ -1830,7 +1850,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
         msg = '   - no sky images!'
         log.message(msg, with_header=False)
         # Get outa here!
-        return None, None
+        return None, None, None, None
 
     # Check sky continuum fit image
     if work['wrk_config'] not in work['exposures']['sky'].keys():
@@ -1838,7 +1858,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
         msg = '   - {0}: sky image not found!'.format(work['wrk_config'])
         log.message(msg, with_header=False)
         # Get outa here!
-        return None, None
+        return None, None, None, None
 
     # Initialise sky continuum fit image
     sky_cf_image = None
@@ -1850,9 +1870,9 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
         with fits.open(sky_cf['file'], mode='readonly') as skyhdu:
 
             # Check target name of sky continuum fit image file
-            if skyhdu[PRIMARY].header['OBJECT'] == trg_name:
+            if product_object(skyhdu) == trg_name:
                 # Set sky continuum fit image
-                sky_cf_image = skyhdu[SCI].data.copy()
+                sky_cf_image = product_flux_data(skyhdu).copy()
                 break
 
     # Check sky continuum fit image
@@ -1862,7 +1882,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
                ).format(work['wrk_config'])
         log.message(msg, with_header=False)
         # Get outa here!
-        return None, None
+        return None, None, None, None
 
     # Initialise sky continuum subtracted image
     sky_cs_image = None
@@ -1874,9 +1894,9 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
         with fits.open(sky_cs['file'], mode='readonly') as skyhdu:
 
             # Check target name of sky continuum subtracted image file
-            if skyhdu[PRIMARY].header['OBJECT'] == trg_name:
+            if product_object(skyhdu) == trg_name:
                 # Set sky continuum subtracted image
-                sky_cs_image = skyhdu[SCI].data.copy()
+                sky_cs_image = product_flux_data(skyhdu).copy()
                 break
 
     # Check sky continuum subtracted image
@@ -1886,7 +1906,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
                ).format(work['wrk_config'])
         log.message(msg, with_header=False)
         # Get outa here!
-        return None, None
+        return None, None, None, None
 
     # Initialise sky spectral channels fit image
     sky_sf_image = None
@@ -1898,9 +1918,9 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
         with fits.open(sky_sf['file'], mode='readonly') as skyhdu:
 
             # Check target name of sky spectral channels fit image file
-            if skyhdu[PRIMARY].header['OBJECT'] == trg_name:
+            if product_object(skyhdu) == trg_name:
                 # Set sky spectral channels fit image
-                sky_sf_image = skyhdu[SCI].data.copy()
+                sky_sf_image = product_flux_data(skyhdu).copy()
 
     # Check sky spectral channels fit image
     if sky_sf_image is None:
@@ -1909,7 +1929,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
                ).format(work['wrk_config'])
         log.message(msg, with_header=False)
         # Get outa here!
-        return None, None
+        return None, None, None, None
 
     # Initialise object to sky spectral channels fit ratio image
     rat_sf_image = np.ones(sci_sf_image.shape, dtype=np.float32)  # all values initialized to 1
@@ -1978,7 +1998,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     comment = 'Image has been sky subtracted'
     hdu['Primary'].header['SKYSUB'] = (value, comment)
 
-    return sci_image, sci_image_with_cont
+    return sci_image, sci_image_with_cont, sky_scaled, sky_cf_image
 
 
 # ---------------------------------------------------------------------------- #
@@ -2288,9 +2308,9 @@ def set_skyline_mask(hdu, work, log, sf_image=None):
             with fits.open(sky_a['file'], mode='readonly') as skyhdu:
 
                 # Check target name of sky continuum fit image file
-                if skyhdu[PRIMARY].header['OBJECT'] == trg_name:
+                if product_object(skyhdu) == trg_name:
                     # Set sky continuum fit image
-                    sky_a_image = skyhdu[SCI].data.copy()
+                    sky_a_image = product_flux_data(skyhdu).copy()
                     break
 
         # Check sky image
@@ -2393,77 +2413,118 @@ def stack_fibre_image(traces, fibres, fibre_type='all', dtype=np.float32):
     return fibre_image
 
 # ---------------------------------------------------------------------------- #
-def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log):
+def poisson_ivar(flux, gpcnt, exptime, gain):
+    """
+    Poisson inverse variance.
+    Renormalizes by per-fiber mean good-pixel count.
+    """
+    flux = np.asarray(flux, float)
+    gpcnt = np.asarray(gpcnt, float)
+    renorm = np.nanmean(gpcnt, axis=1, keepdims=True) * np.ones_like(flux)   # per-fiber mean gpcnt
+    mask = gpcnt > 0
+    counts = np.full(flux.shape, np.nan)
+    counts[mask] = (flux[mask] / renorm[mask]) * exptime           # un-normalized counts per pixel
+    sigma = np.full(flux.shape, np.nan)
+    sigma[mask] = (np.sqrt(np.abs(counts[mask]) / gain) / exptime) * renorm[mask]
+    ivar = np.zeros(flux.shape, dtype=np.float32)
+    good = np.isfinite(sigma) & (sigma > 0)
+    ivar[good] = 1.0 / sigma[good] ** 2
+    return ivar
+
+
+def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=None):
 # ---------------------------------------------------------------------------- #
 
     # Check new image
     if new_image is None: return hdu
 
-    # Initialise new hdu
+    orig = hdu[PRIMARY].header
+    exptime = orig.get('EXPTIME'); gain = orig.get('GAIN')
+
     hdu_new = []
 
-    # Create new Primary extension (copy header from original fits)
-    hdu_primary = fits.PrimaryHDU(header=hdu[PRIMARY].header)
-    # Set nr of extensions in Primary extension header
-    hdu_primary.header['NSCIEXT'] = (1, 'Number of science extensions')
-    hdu_primary.header['NEXTEND'] = (1, 'Number of data extensions')
-    # Add new Primary extension to new hdu
+    # --- 0 PRIMARY: empty ---
+    hdu_primary = fits.PrimaryHDU()
+    hdu_primary.header['NEXTEND'] = (0, 'Number of data extensions')  # updated at write
     hdu_new.append(hdu_primary)
 
-    # Create science hdu
-    hdu_sci = fits.ImageHDU(data=new_image, name=SCI)
-    # Set header items
-    set_header_items(hdu_sci.header, work)
-    # Set extension name in science header
-    hdu_sci.header['EXTNAME'] = (SCI, 'Extension name')
-    # Set extension nr in science header
-    hdu_sci.header['EXTVER'] = (1, 'Extension number')
-    # Add new science extension to new hdu
-    hdu_new.append(hdu_sci)
+    # --- 1 FLUX ---
+    hdu_flux = fits.ImageHDU(data=new_image, name='FLUX')
+    set_header_items(hdu_flux.header, work)
+    hdu_flux.header['EXTNAME'] = ('FLUX', 'extracted fiber spectra')
+    hdu_flux.header['EXTVER'] = (1, 'Extension number')
+    hdu_new.append(hdu_flux)
 
-    # create wavength hdu (shared by SCI and SPECRES)
+    # --- 2 IVAR / 3 MASK (BPM, GPCNT == 0) ---
+    if gp_image is not None:
+        gp = np.asarray(gp_image)
+        flux = np.asarray(new_image)
+        n_flux, n_gp = flux.shape[1], gp.shape[1]
+
+        # FLUX and GPCNT can have different widths
+        # Rectification adds dead pixels to the blue edge of FLUX that GPCNT doesn't have 
+        # need to re-align them
+        off = n_flux - n_gp 
+        if off > 0:
+            flux_gp = flux[:, off:off + n_gp]  # FLUX wider,  drop its extra blue pixels
+        elif off < 0:
+            flux_gp = flux; gp = gp[:, -off:-off + n_flux]; off, n_gp = 0, n_flux  # GPCNT wider,  drop its extra
+        else:
+            flux_gp = flux   # same width,  nothing to align
+
+        if exptime is not None and gain is not None:
+            # errors on the aligned grid, then slot back into the full FLUX width
+            ivar_gp = poisson_ivar(flux_gp, gp, exptime, gain)  
+            ivar = np.zeros((gp.shape[0], n_flux), dtype=np.float32)  # unmatched edge = 0
+            ivar[:, off:off + n_gp] = ivar_gp
+            hdu_ivar = fits.ImageHDU(data=ivar, name='IVAR')
+            hdu_ivar.header['EXTNAME'] = ('IVAR', 'object Poisson inverse variance of FLUX')
+            hdu_new.append(hdu_ivar)
+
+        # Unmatched edge starts all-bad
+        # fill the rest from GPCNT.
+        mask = np.ones((gp.shape[0], n_flux), dtype=np.int16)
+        mask[:, off:off + n_gp] = (gp == 0).astype(np.int16)
+        hdu_mask = fits.ImageHDU(data=mask, name='MASK')
+        hdu_mask.header['EXTNAME'] = ('MASK', 'bad-pixel mask (1 = bad, gpcnt == 0)')
+        hdu_new.append(hdu_mask)
+
+    # --- 4 WAVE ---
     hdu_wave = fits.ImageHDU(data=np.asarray(work['we'], dtype=np.float32), name='WAVE')
-    hdu_wave.header['EXTNAME'] = ('WAVE', 'Extension name')
+    hdu_wave.header['EXTNAME'] = ('WAVE', 'wavelength vector')
     hdu_wave.header['BUNIT'] = ('Angstrom', 'Wavelength unit')
     hdu_new.append(hdu_wave)
 
-    # Check good pixel count image
-    if gp_image is not None:
-        # Create science hdu
-        hdu_sci = fits.ImageHDU(data=gp_image, name=GPCNT)
-        # Set header items
-        set_header_items(hdu_sci.header, work)
-        # Set extension name in science header
-        hdu_sci.header['EXTNAME'] = (GPCNT, 'Extension name')
-        # Set extension nr in science header
-        hdu_sci.header['EXTVER'] = (2, 'Extension number')
-        # Add new science extension to new hdu
-        hdu_new.append(hdu_sci)
-
-    # Spectral resolution extension: per-pixel R = lambda / FWHM on the product grid
+    # --- 5 SPECRES ((median R across fibers) / 6 SPECRESD (1-sigma scatter) ---
     res = work.get('resolution_fit')
     if res is not None:
-        R = evaluate_resolution(res, work['we'])[0].astype(np.float32)  # median resolution value across all fibers
-        hdu_res = fits.ImageHDU(data=R, name=SPECRES)
-        hdu_res.header['EXTNAME'] = (SPECRES, 'Extension name')
+        R = evaluate_resolution(res, work['we'])            # (3, N): median, 16th, 84th
+        hdu_res = fits.ImageHDU(data=R[0].astype(np.float32), name=SPECRES)
+        hdu_res.header['EXTNAME'] = (SPECRES, 'median spectral resolution R = lambda/FWHM')
         hdu_res.header['BUNIT'] = ('', 'Dimensionless R = lambda / FWHM')
-        hdu_res.header['SPRESQTY'] = ('R', 'Resolving power lambda/dlambda, per pixel')
-        # copy linear WCS from SCI
         for k in ('CRPIX1', 'CRVAL1', 'CDELT1', 'CTYPE1', 'CUNIT1'):
-            if k in hdu_sci.header:
-                hdu_res.header[k] = hdu_sci.header[k]
+            if k in hdu_flux.header:
+                hdu_res.header[k] = hdu_flux.header[k]
         write_resolution_header(hdu_res.header, res)
         hdu_new.append(hdu_res)
 
-        # per-fibre FWHM polynomial coefficients
-        coeffs = np.atleast_2d(np.asarray(res['coeffs'], dtype=np.float64))
-        hdu_res_fiber = fits.ImageHDU(data=coeffs.astype(np.float32), name='SPECRES_COEFF_PER_FIBER')
-        hdu_res_fiber.header['EXTNAME']  = ('SPECRES_COEFF_PER_FIBER', 'Per-fibre FWHM poly coeffs (nfib x deg+1)')
-        hdu_res_fiber.header['SPRESDEG'] = (res['order'], 'poly degree; cols ordered lambda**deg..0')
-        hdu_res_fiber.header['SPRESWLO'] = (res['w_min'], 'Arc coverage min wavelength')
-        hdu_res_fiber.header['SPRESWHI'] = (res['w_max'], 'Arc coverage max wavelength')
-        hdu_res_fiber.header['NFIBRES']  = (coeffs.shape[0], 'Number of fibres')
-        hdu_new.append(hdu_res_fiber)
+        hdu_resd = fits.ImageHDU(data=((R[2] - R[1]) / 2.0).astype(np.float32), name='SPECRESD')
+        hdu_resd.header['EXTNAME'] = ('SPECRESD', '1-sigma scatter of R across fibers')
+        hdu_new.append(hdu_resd)
+
+    # --- 7 OBSINFO (observation metadata) ---
+    hdu_obs = fits.ImageHDU(name='OBSINFO')
+    hdu_obs.header.extend(orig, strip=True, update=True)   # copy obs keywords, drop structural cards
+    hdu_obs.header['EXTNAME'] = ('OBSINFO', 'observation metadata')
+    hdu_new.append(hdu_obs)
+
+    # --- 8 SKYCORR (sky model subtracted) ---
+    if skycorr is not None:
+        hdu_sky = fits.ImageHDU(data=np.asarray(skycorr, dtype=np.float32), name='SKYCORR')
+        hdu_sky.header['EXTNAME'] = ('SKYCORR', 'sky model subtracted (cs - ss)')
+        hdu_new.append(hdu_sky)
+
+    hdu_new[0].header['NEXTEND'] = (len(hdu_new) - 1, 'Number of data extensions')
 
     # Create new fits
     hdu = fits.HDUList(hdus=hdu_new)
@@ -2496,8 +2557,8 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log):
     # Set exposures list entry dictionary
     entry = {
         'file': new_file,
-        'proposal': hdu[PRIMARY].header['PROPID'],
-        'object': hdu[PRIMARY].header['OBJECT']
+        'proposal': orig.get('PROPID'),
+        'object': orig['OBJECT']
     }
     # Add entry dictionary to exposures list
     exposures[tag].append(entry)
