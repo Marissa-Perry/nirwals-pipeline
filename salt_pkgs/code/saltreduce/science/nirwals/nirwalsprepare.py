@@ -506,15 +506,15 @@ def fit_continuum(image, config):
         # Set row continuum in continuum array
         continuum[i] = c_fit(p)
 ####>
-        # plt.figure(1, figsize=(16, 9), tight_layout=True)
-        # plt.plot(p, f, lw=1, ls='-', c='black')
-        # plt.plot(p[mask], f[mask], lw=0.75, ls='-', c='cyan')
-        # plt.plot(p, c_fit(p), lw=0.75, ls='--', c='red')
-        # plt.xlabel('Pixel')
-        # plt.ylabel('Flux')
-        # plt.title('Row: {0}'.format(i+1))
-        # plt.show()
-        # plt.close()
+#         plt.figure(1, figsize=(16, 9), tight_layout=True)
+#         plt.plot(p, f, lw=1, ls='-', c='black')
+#         plt.plot(p[cm], f[cm], lw=0.75, ls='-', c='cyan')
+#         plt.plot(p, c_fit(p), lw=0.75, ls='--', c='red')
+#         plt.xlabel('Pixel')
+#         plt.ylabel('Flux')
+#         plt.title('Row: {0}'.format(i+1))
+#         plt.show()
+#         plt.close()
 ####<
     return continuum
 
