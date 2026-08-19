@@ -6,31 +6,17 @@ __pycache__/
 # Ignore all date directories
 20*/
 
-# Ignore all date directories
-20*/
-
-# keep an example directory
-!20240725/
-
-# include final dat product directory
-!20240725/2024-1-LSP-001/
-!20240725/2024-1-LSP-001/product/
-# ignore contents
-20240725/2024-1-LSP-001/product/*
-!20240725/2024-1-LSP-001/product/.gitkeep
-
-# Ignore all date directories
-20*/
-
 # Keep an example directory structure
 !20240725/
 
 # keep subdirectories
 !20240725/2024-1-LSP-001/
+!20240725/2024-1-LSP-001/product/
 !20240725/nirwals/
 !20240725/nirwals/NIRWALS_work/
 !20240725/nirwals/product/
 # Ignore everything inside them
+20240725/2024-1-LSP-001/product/*
 20240725/nirwals/NIRWALS_work/*
 20240725/nirwals/product/*
 # .gitkeep allow Git to track empty directories
