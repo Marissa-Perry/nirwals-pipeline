@@ -10,19 +10,18 @@ __pycache__/
 !20240725/
 
 # keep subdirectories
-!20240725/2024-1-LSP-001/
-!20240725/2024-1-LSP-001/product/
 !20240725/nirwals/
 !20240725/nirwals/NIRWALS_work/
 !20240725/nirwals/product/
+!20240725/nirwals/raw/
 # Ignore everything inside them
-20240725/2024-1-LSP-001/product/*
 20240725/nirwals/NIRWALS_work/*
 20240725/nirwals/product/*
+20240725/nirwals/raw/*
 # .gitkeep allow Git to track empty directories
-!20240725/2024-1-LSP-001/product/.gitkeep
 !20240725/nirwals/NIRWALS_work/.gitkeep
 !20240725/nirwals/product/.gitkeep 
+!20240725/nirwals/raw/.gitkeep 
 
 # debugging notebooks
 wrappers/*.ipynb
