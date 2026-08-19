@@ -20,6 +20,7 @@ __pycache__/
 20240725/nirwals/NIRWALS_work/*
 20240725/nirwals/product/*
 # .gitkeep allow Git to track empty directories
+!20240725/2024-1-LSP-001/product/.gitkeep
 !20240725/nirwals/NIRWALS_work/.gitkeep
 !20240725/nirwals/product/.gitkeep 
 
