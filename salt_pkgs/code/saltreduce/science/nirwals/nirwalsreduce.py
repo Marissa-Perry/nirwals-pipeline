@@ -565,38 +565,6 @@ def set_other_work_variables(hdu, traces, work):
 
     return
 
-# ---------------------------------------------------------------------------- #
-def set_dark_file(hdulist, prd_dir, prefix, obs_date, subtract=True):
-# ---------------------------------------------------------------------------- #
-    """
-    Find master dark frame with the same exposure time as current image.
-    """
-
-    # check if dark subtraction
-    if not subtract:
-        return None
-
-    # get exposure time of current frame
-    exp_time = hdulist[PRIMARY].header['EXPTIME']
-    # Set wildcard for master dark file(s)
-    wildcard = '{0}{1}Dark*.fits'.format(prefix, obs_date)
-    # Add product data directory to wildcard
-    wildcard = os.path.join(prd_dir, wildcard)
-    # Get master dark file(s)
-    dark_files = sorted(glob.glob(wildcard))
-
-    if not dark_files:
-        raise FileNotFoundError('No master dark files found with wildcard: {0}'.format(wildcard))
-
-    # get exposure time of dark frame and match by exposure time
-    matches = [f for f in dark_files if fits.getheader(f, PRIMARY)['EXPTIME'] == exp_time]
-
-    if len(matches) == 0:
-        raise ValueError('No matching master dark found for EXPTIME={0} using wildcard {1}'.format(exp_time, wildcard))
-    if len(matches) > 1:
-        raise ValueError(f'Found multiple master darks for EXPTIME={exp_time}: {[os.path.basename(m) for m in matches]}')
-    
-    return matches[0]
 
 # ---------------------------------------------------------------------------- #
 def set_read_noise(hdu, work):
@@ -635,28 +603,7 @@ def extract_fibres_from_image(hdu, traces, work, log):
             return fibres
 
     # Set science image
-    # sci = hdu[SCI].data.copy()  # renaming for diagnostic plotting !!!
-    sci_raw = hdu[SCI].data.copy()
-
-    ######## DARK SUBTRACTION ##########
-    # find master dark frame with the same exposure time as current image (HDU)
-    dark_file = set_dark_file(hdu, work['prd_dir'], work['raw_prefix'], work['obs_date'], subtract=work.get('dark', {}).get('subtract', False))
-    
-    # dark subtract
-    if dark_file is not None:
-        
-        # read and save master dark frame
-        with fits.open(dark_file, mode='readonly') as dark_hdu:
-            dark = dark_hdu[SCI].data.copy()
-        dark = np.where(np.isfinite(dark), dark, 0.0)  # set any infinite values to zero
-
-        # dark subtract this frame
-        sci = sci_raw - dark
-    
-    # skip dark subtraction
-    else:
-        sci = sci_raw.copy()
-    ############################################
+    sci = hdu[SCI].data.copy()
 
     # saving science image without bad-pixel masking for optimal extraction
     sci_unmasked = sci.copy()
