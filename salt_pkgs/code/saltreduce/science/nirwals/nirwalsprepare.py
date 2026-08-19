@@ -201,10 +201,8 @@ def generate_bpm(obs_date, log, **kwargs):
         if len(flat_files) == 0:
             raise RuntimeError(f'No combined flat files found for {obs_date}')
 
-        # ---------- dark-subtract each master flat in memory ----------  # (dark sub for BPM generation but not fiber tracing)
         flat_stack = []
         for flat_file in flat_files:
-            # prevents a second subtraction
             with fits.open(flat_file) as hdulist:
                 flat_stack.append(hdulist[SCI].data.copy())
         master_flat = np.median(np.array(flat_stack), axis=0)
@@ -229,7 +227,7 @@ def generate_bpm(obs_date, log, **kwargs):
         plt.savefig(filepath, dpi=150, format='png', bbox_inches="tight")
         plt.close()
 
-        # ---------- component 2: master darks (upper threshold) ----------
+        # ---------- component 2: master darks ------------
         bpm_dark = np.zeros(bpm.shape, dtype=bool)
         plot_dark = None   # arrays kept for the longest-exposure diagnostic only
 
@@ -243,8 +241,9 @@ def generate_bpm(obs_date, log, **kwargs):
             p84 = np.percentile(d[finite], 84)   # median + 1 sigma
             sig = p84 - med
             upper = med + bpm_thresh_sigma * sig
+            lower = med - bpm_thresh_sigma * sig
 
-            flagged = finite & (d > upper)
+            flagged = finite & ((d > upper) | (d < lower))
             bpm_dark |= flagged
 
             bad_dark_perc = 100 * flagged.sum() / finite.sum()
@@ -252,7 +251,7 @@ def generate_bpm(obs_date, log, **kwargs):
 
             # retain only the longest exposure (the most stressing case) for plotting
             if plot_dark is None or exptime > plot_dark['exptime']:
-                plot_dark = dict(exptime=exptime, data=d[finite], med=med, upper=upper, perc=bad_dark_perc)
+                plot_dark = dict(exptime=round(exptime), data=d[finite], med=med, upper=upper, lower=lower, perc=bad_dark_perc)
 
         bpm[bpm_dark] = 1.
 
@@ -260,13 +259,14 @@ def generate_bpm(obs_date, log, **kwargs):
         if plot_dark is not None:
             zoom = plot_dark['data'][plot_dark['data'] < 30]
             if zoom.size:
-                bin_width = 0.8
+                bin_width = 0.1
                 custom_bins = np.arange(zoom.min(), zoom.max() + bin_width, bin_width)
                 plt.figure(figsize=(8, 5))
-                plt.title(fr"{plot_dark['exptime']:.1f}s master dark, {plot_dark['perc']:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$", fontsize=13, pad=15)
+                plt.title(fr"{plot_dark['exptime']}s master dark, {plot_dark['perc']:.1f}% bad pixels", fontsize=13, pad=15)
                 plt.hist(zoom, bins=custom_bins, color='black', alpha=0.9)
+                plt.axvline(plot_dark['lower'], color='grey', linestyle='dotted')
                 plt.axvline(plot_dark['med'], color='red', linestyle='dotted', label='median')
-                plt.axvline(plot_dark['upper'], color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ upper threshold')
+                plt.axvline(plot_dark['upper'], color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
                 plt.yscale('log')
                 plt.xlim(-10, 30)
                 plt.xlabel('counts / s', fontsize=14, labelpad=15)
@@ -297,10 +297,10 @@ def generate_bpm(obs_date, log, **kwargs):
         # ---------- diagnostic ----------
         zoom = fvals[fvals < 10**4.5]
         if zoom.size:
-            bin_width = 500
+            bin_width = 50
             custom_bins = np.arange(zoom.min(), zoom.max() + bin_width, bin_width)
             plt.figure(figsize=(8, 5))
-            plt.title(fr'master flat, {bad_flat_perc:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=13, pad=15)
+            plt.title(fr'master flat, {bad_flat_perc:.1f}% bad pixels', fontsize=13, pad=15)
             plt.hist(zoom, bins=custom_bins, color='black', alpha=0.9)
             plt.axvline(median_flat, color='red', linestyle='dotted', label='median')
             plt.axvline(upper_flat, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
