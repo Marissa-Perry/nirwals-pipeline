@@ -32,7 +32,7 @@
 
         ],
         "threshold": {
-            "sigma": 5.0
+            "sigma": 3.0
         }
     },
 
