@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 import os
 import json
 import importlib
@@ -9,7 +7,7 @@ def load_json(path):
         return json.load(f)
 
 
-def run_workflow(obs_date, workflow_filepath=None, with_stdout=True, only_stdout=False):
+def run_workflow(obs_date, workflow_filepath=None, with_stdout=True, only_stdout=False, run_primary=True):
 
     # setting dirs as absolute paths
     param_rel_path = os.path.join('nirwals_pipeline','salt_pkgs','params')
@@ -22,6 +20,14 @@ def run_workflow(obs_date, workflow_filepath=None, with_stdout=True, only_stdout
 
     # if no work directory, make one
     os.makedirs(work_dir, exist_ok=True)
+
+    # run primary reductions
+    if run_primary:
+        module_path = "nirwals_pipeline.salt_pkgs.code.saltreduce.primary.primary_reductions"
+        print(f"\n[WORKFLOW] primary reductions")
+        print(f"   --- module: {module_path}\n")
+        primary = importlib.import_module(module_path)
+        primary.run(obs_date)
 
     # retireving workflow
     if not workflow_filepath:
@@ -53,8 +59,8 @@ def run_workflow(obs_date, workflow_filepath=None, with_stdout=True, only_stdout
             
             # retrieve sub-workflow file
             sub_workflow = os.path.join(os.path.dirname(workflow_filepath), task["name"])
-            # recurse into sub-workflow
-            run_workflow(obs_date, workflow_filepath=sub_workflow, with_stdout=with_stdout, only_stdout=only_stdout)
+            # recurse into sub-workflow (do not re-run primary reductions)
+            run_workflow(obs_date, workflow_filepath=sub_workflow, with_stdout=with_stdout, only_stdout=only_stdout, run_primary=False)
 
         # if task is a module, execute
         elif task["type"] == "module":
@@ -73,7 +79,7 @@ def run_workflow(obs_date, workflow_filepath=None, with_stdout=True, only_stdout
                 module_path = "nirwals_pipeline.salt_pkgs.code.saltreduce.science.nirwals.nirwalsreduce"
                 func_name = "reduce_data"
             else:
-                raise ImportError(f"Unknown pipeline module: {task["name"]}")
+                raise ImportError(f"Unknown pipeline module: {task['name']}")
             
             # importing module
             try:
