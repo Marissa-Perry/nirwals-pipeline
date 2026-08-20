@@ -10,7 +10,14 @@ Science data reduction pipeline for reducing NIRWALS data from SALT.
 
 ## Setup
 
-[eventually add a list of dependencies in .txt file]
+Clone this repository, then create and activate the conda environment with all dependencies:
+
+```bash
+git clone https://github.com/Marissa-Perry/nirwals-pipeline.git
+cd nirwals-pipeline
+conda env create -f nirwals_drp_env.yml
+conda activate nirwals_drp_env
+```
 
 ## Usage
 ```bash
