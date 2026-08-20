@@ -1,6 +1,6 @@
 # NIRWALS Pipeline
 
-Science data reduction pipeline for reducing NIRWALS data from SALT.
+Primary and science data reduction pipeline for reducing NIRWALS data from SALT.
 
 ## Structure
 
