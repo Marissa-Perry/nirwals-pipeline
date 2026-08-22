@@ -17,6 +17,7 @@ from datetime import datetime
 import numpy as np
 # astropy import
 from astropy.io import fits
+from scipy.ndimage import median_filter
 from astropy.stats import mad_std
 # matplotlib imports
 import matplotlib.pyplot as plt
@@ -274,45 +275,54 @@ def generate_bpm(obs_date, log, **kwargs):
                 plt.legend(fontsize=13, loc='upper right')
                 plot_dir = os.path.join(bpm_dir, 'plots')
                 os.makedirs(plot_dir, exist_ok=True)
-                filepath = os.path.join(plot_dir, f"master_dark_threshold_exptime{plot_dark['exptime']:.1f}.png")
+                filepath = os.path.join(plot_dir, f"master_dark_threshold_exptime{plot_dark['exptime']}.png")
                 plt.savefig(filepath, dpi=150, format='png', bbox_inches='tight')
                 plt.close()
 
-        # ---------- component 3: master flat (two-sided threshold) ----------
+        # -------------- component 3: master flat --------------
+        # Flag pixels by their deviation from the smoothed structure of the master flat
+        smooth_k = config['bpm']['threshold']['flat_smooth_k']
+        illum_frac = config['bpm']['threshold']['flat_illum_frac']
+
         finite_flat = np.isfinite(master_flat)
-        fvals = master_flat[finite_flat]
+        fill = np.median(master_flat[finite_flat])  # fill non-finite so the median filter stays defined
+        smooth = median_filter(np.where(finite_flat, master_flat, fill), size=(1, smooth_k))
 
-        median_flat = np.median(fvals)
-        p16, p84 = np.percentile(fvals, [16, 84])
-        sig_lower_flat = median_flat - p16
-        sig_upper_flat = p84 - median_flat
+        # fiber pixels illumination level
+        core = np.percentile(smooth[np.isfinite(smooth)], 90)
+        illum = finite_flat & (smooth > illum_frac * core)
+        # response of detector: ratio between a smoothed master flat pixels and raw master flat
+        response = np.full(master_flat.shape, np.nan, dtype=float)
+        response[illum] = master_flat[illum] / smooth[illum]  
+        # noise-normalised deviation: (response - 1) * sqrt(counts) 
+        z = np.full(master_flat.shape, np.nan, dtype=float)
+        z[illum] = (response[illum] - np.median(response[illum])) * np.sqrt(np.clip(smooth[illum], 1.0, None))  #
+        z_scatter = mad_std(z[illum])
 
-        lower_flat = median_flat - bpm_thresh_sigma * sig_lower_flat
-        upper_flat = median_flat + bpm_thresh_sigma * sig_upper_flat
+        bpm_flat = np.zeros(master_flat.shape, dtype=bool)
+        bpm_flat[illum] = (np.abs(z[illum]) > bpm_thresh_sigma * z_scatter)  # identifying bad pixels
+        bpm[bpm_flat] = 1.
+        flat_bpm_perc = 100 * bpm_flat.sum() / illum.sum()
+        log.message('   - flat BPM: {0:.2f}% flagged over illuminated pixels (smooth_k={1}, {2}sigma)'.format(flat_bpm_perc, smooth_k, bpm_thresh_sigma), with_header=False)
 
-        flat_bad = finite_flat & ((master_flat < lower_flat) | (master_flat > upper_flat))
-        bpm[flat_bad] = 1.
-        bad_flat_perc = 100 * flat_bad.sum() / finite_flat.sum()
-
-        # ---------- diagnostic ----------
-        zoom = fvals[fvals < 10**4.5]
-        if zoom.size:
-            bin_width = 50
-            custom_bins = np.arange(zoom.min(), zoom.max() + bin_width, bin_width)
+        # ---------- diagnostic: noise-normalised flat deviation ----------
+        zvals = z[illum]
+        zvals = zvals[np.isfinite(zvals)]
+        if zvals.size:
+            lim = np.percentile(np.abs(zvals), 99.9)
             plt.figure(figsize=(8, 5))
-            plt.title(fr'master flat, {bad_flat_perc:.1f}% bad pixels', fontsize=13, pad=15)
-            plt.hist(zoom, bins=custom_bins, color='black', alpha=0.9)
-            plt.axvline(median_flat, color='red', linestyle='dotted', label='median')
-            plt.axvline(upper_flat, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
-            plt.axvline(lower_flat, color='grey', linestyle='dotted')
+            plt.title(fr'master flat response, {flat_bpm_perc:.2f}% bad pixels', fontsize=13, pad=15)
+            plt.hist(zvals, bins=np.linspace(-lim, lim, 201), color='black', alpha=0.9)
+            plt.axvline(bpm_thresh_sigma * z_scatter, color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
+            plt.axvline(-bpm_thresh_sigma * z_scatter, color='grey', linestyle='dotted')
+            plt.axvline(0.0, color='red', linestyle='dotted', label='median')
             plt.yscale('log')
-            plt.xlim(-10**4.5, 10**4.5)
-            plt.xlabel('counts / s', fontsize=14, labelpad=15)
+            plt.xlabel(r'noise-normalised deviation', fontsize=13, labelpad=15)
             plt.ylabel('# of pixels', fontsize=14, labelpad=15)
             plt.legend(fontsize=13, loc='upper right')
             plot_dir = os.path.join(bpm_dir, 'plots')
             os.makedirs(plot_dir, exist_ok=True)
-            filepath = os.path.join(plot_dir, 'master_flat_threshold.png')
+            filepath = os.path.join(plot_dir, 'master_flat_response.png')
             plt.savefig(filepath, dpi=150, format='png', bbox_inches='tight')
             plt.close()
         # ---------- bad-pixel percentage + header comment ----------

@@ -32,7 +32,9 @@
 
         ],
         "threshold": {
-            "sigma": 3.0
+            "sigma": 3.0,
+            "flat_smooth_k": 15,
+            "flat_illum_frac": 0.2
         }
     },
 
