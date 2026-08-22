@@ -244,7 +244,7 @@ def generate_bpm(obs_date, log, **kwargs):
             upper = med + bpm_thresh_sigma * sig
             lower = med - bpm_thresh_sigma * sig
 
-            flagged = finite & ((d > upper) | (d < lower))
+            flagged = finite & (d > upper) #| (d < lower))  # only upper since dark current accumulates, don't want to cut on noise floor
             bpm_dark |= flagged
 
             bad_dark_perc = 100 * flagged.sum() / finite.sum()
@@ -265,7 +265,7 @@ def generate_bpm(obs_date, log, **kwargs):
                 plt.figure(figsize=(8, 5))
                 plt.title(fr"{plot_dark['exptime']}s master dark, {plot_dark['perc']:.1f}% bad pixels", fontsize=13, pad=15)
                 plt.hist(zoom, bins=custom_bins, color='black', alpha=0.9)
-                plt.axvline(plot_dark['lower'], color='grey', linestyle='dotted')
+                # plt.axvline(plot_dark['lower'], color='grey', linestyle='dotted')
                 plt.axvline(plot_dark['med'], color='red', linestyle='dotted', label='median')
                 plt.axvline(plot_dark['upper'], color='grey', linestyle='dotted', label=fr'{bpm_thresh_sigma}$\sigma$ threshold')
                 plt.yscale('log')
@@ -322,7 +322,7 @@ def generate_bpm(obs_date, log, **kwargs):
             plt.legend(fontsize=13, loc='upper right')
             plot_dir = os.path.join(bpm_dir, 'plots')
             os.makedirs(plot_dir, exist_ok=True)
-            filepath = os.path.join(plot_dir, 'master_flat_response.png')
+            filepath = os.path.join(plot_dir, 'master_flat_threshold.png')
             plt.savefig(filepath, dpi=150, format='png', bbox_inches='tight')
             plt.close()
         # ---------- bad-pixel percentage + header comment ----------
