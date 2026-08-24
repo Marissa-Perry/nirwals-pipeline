@@ -2063,7 +2063,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
  
     fig, axs = plt.subplots(2, 1, figsize=(10, 5), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [3, 1]})
  
-    axs[0].scatter(chan_idx, scale_wave_plot, lw=0.8, color='black')
+    axs[0].scatter(chan_idx, scale_wave_plot, s=5, color='black')
     axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
     axs[0].set_ylabel('scale factor', fontsize=12, labelpad=10)
     axs[0].set_title('wavelength-dependent sky-line scale', fontsize=15, pad=15)
