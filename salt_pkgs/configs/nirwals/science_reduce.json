@@ -235,6 +235,15 @@
             }
         }
     },
+    "sky_scaling": {
+        "notes": [
+        "a. sky-line scale is fit by minimising the sky-subtracted residual (least-squares projection) over the sky-line pixels;",
+        "b. includes a wavelength-dependent term and a residual fibre-dependent term, fit in sequence;",
+        "c. n_sigma and n_iter set the iterative residual sigma-clipping that stops bright line cores from dragging the fit"
+        ],
+        "n_sigma": 3,
+        "n_iter": 3
+    },
 
     "config_key": {
         "lists": {
