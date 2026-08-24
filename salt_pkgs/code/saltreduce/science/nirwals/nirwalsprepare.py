@@ -287,10 +287,8 @@ def generate_bpm(obs_date, log, **kwargs):
         finite_flat = np.isfinite(master_flat)
         fill = np.median(master_flat[finite_flat])  # fill non-finite so the median filter stays defined
         smooth = median_filter(np.where(finite_flat, master_flat, fill), size=(1, smooth_k))
-
-        # fiber pixels illumination level
-        core = np.percentile(smooth[np.isfinite(smooth)], 90)
-        illum = finite_flat & (smooth > illum_frac * core)
+        core = np.percentile(smooth[np.isfinite(smooth)], 90)  # estimating the core illumination level of fibers as the 90th percentile
+        illum = finite_flat & (smooth > illum_frac * core)     # estimating the rest of the fiber profile as being > 20% of this core illumination level
         # response of detector: ratio between a smoothed master flat pixels and raw master flat
         response = np.full(master_flat.shape, np.nan, dtype=float)
         response[illum] = master_flat[illum] / smooth[illum]  
@@ -332,7 +330,7 @@ def generate_bpm(obs_date, log, **kwargs):
 
     # diagnostic plot for bpm image
     plt.figure(figsize=(10,5))
-    plt.title(fr'{perc_bad:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$, BPM generated: {generate}', fontsize=12, pad=15)
+    plt.title(fr'{perc_bad:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=12, pad=15)
     plt.imshow(bpm, origin='lower', cmap='Greys_r', vmin=0, vmax=1) 
     # Set png file
     plot_dir = os.path.join(bpm_dir,'plots')
