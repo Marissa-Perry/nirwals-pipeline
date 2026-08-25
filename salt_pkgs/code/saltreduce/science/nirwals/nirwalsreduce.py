@@ -849,8 +849,8 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     res = compute_spectral_resolution(fibre_image, work, log)
     if res is not None:
         # Attach to the wavelength solution so it's dumped with the solution
-        ws['resolution'] = {k: v for k, v in res.items() if k != 'R'}  # don't use resolution arrays in JSON
-        work['resolution_fit'] = res  # use resolution arrays for HDU
+        ws['resolution'] = {k: v for k, v in res.items() if k != 'R'} 
+        work['resolution_fit'] = res
 
     # Add rectified (wavelength calibrated) header key
     value = time.asctime(time.localtime())
