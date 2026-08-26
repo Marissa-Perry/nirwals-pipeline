@@ -844,14 +844,6 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     # Stack good pixels count image: fibre type 'all'
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
 
-    # Compute spectral resolution from the rectified arc image
-    log.message(' - computing spectral resolution', with_header=False)
-    res = compute_spectral_resolution(fibre_image, work, log)
-    if res is not None:
-        # Attach to the wavelength solution so it's dumped with the solution
-        ws['resolution'] = {k: v for k, v in res.items() if k != 'R'} 
-        work['resolution_fit'] = res
-
     # Add rectified (wavelength calibrated) header key
     value = time.asctime(time.localtime())
     comment = 'Image has been wavelength calibrated'
@@ -880,8 +872,8 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
         # Get outa here!
         return
 
-    if ws.get('resolution') is not None:
-        work['resolution_fit'] = ws['resolution']
+    if ws.get('specres') is not None:
+        work['specres_fit'] = ws['specres']
 
     # Set wavelength fit
     wf, w = set_wavelength_fit(ws, work, log)
@@ -915,6 +907,17 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     fibre_image = stack_fibre_image(traces, fibres)
     # Stack good pixels count image: fibre type 'all'
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
+
+    # if sky exposure, compute spectral resolution using skylines
+    if work['exp_type'] == 'sky':
+        # Compute spectral resolution from the rectified sky image
+        log.message(' - computing spectral resolution', with_header=False)
+        res = compute_spectral_resolution(fibre_image, work, log)
+        if res is not None:
+            # attach to the wavelength solution so it's dumped with the solution
+            ws['specres'] = {k: v for k, v in res.items() if k != 'R'} 
+            work['specres_fit'] = res
+
     # Add rectified (wavelength calibrated) header key
     value = time.asctime(time.localtime())
     comment = 'Image has been wavelength calibrated'
@@ -2066,7 +2069,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     axs[0].scatter(chan_idx, scale_wave_plot, s=5, color='black')
     axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
     axs[0].set_ylabel('scale factor', fontsize=12, labelpad=10)
-    axs[0].set_title('wavelength-dependent sky-line scale', fontsize=15, pad=15)
+    axs[0].set_title('wavelength-dependent skyline scale', fontsize=15, pad=15)
     axs[1].fill_between(chan_idx, 0, n_line_per_chan, step='mid', color='grey', alpha=0.3)
     axs[1].set_ylabel('# of skyline\npixels', fontsize=11, labelpad=10)
     axs[1].set_xlabel('spectral channel', fontsize=14, labelpad=10)
@@ -2085,7 +2088,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     axs[0].plot(fibre_idx, scale_fiber_plot, lw=1.2, color='k')
     axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
     axs[0].set_ylabel('scale factor', fontsize=12, labelpad=10)
-    axs[0].set_title('fibre-dependent sky-line scale', fontsize=14, pad=15)
+    axs[0].set_title('fibre-dependent skyline scale', fontsize=14, pad=15)
     axs[1].fill_between(fibre_idx, 0, n_line_per_fibre, step='mid', color='grey', alpha=0.3)
     axs[1].set_ylabel('# of skyline\npixels', fontsize=11, labelpad=10)
     axs[1].set_xlabel('fiber #', fontsize=12, labelpad=12)
@@ -2114,25 +2117,27 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
  
     im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap='magma')
-    axs[0].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    axs[0].set_title('sky continuum-subtracted image  (sky_cs_image)', fontsize=12)
-    colorbar_axis(axs[0], im0, label='counts')
- 
+    # axs[0].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    axs[0].set_title('(A)  continuum-subtracted sky', fontsize=16, pad=5)
+    colorbar_axis(axs[0], im0, label='counts / s')
+
     im1 = axs[1].imshow(scaling_disp, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=v0, vmax=v1, cmap=cmap_nan)
-    axs[1].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    axs[1].set_title('applied scale factor (scale_fiber x scale_wave)', fontsize=12)
+    # axs[1].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    axs[1].set_title('(B)  scale factor', fontsize=16, pad=5)
     colorbar_axis(axs[1], im1, label='scale factor')
  
     im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
-    axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    axs[2].set_title('unscaled sky-sub science  (sci_cs_image - sky_cs_image)', fontsize=12)
-    colorbar_axis(axs[2], im2, label='counts')
+    # axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    axs[2].set_title(r'(C)  object $-$ unscaled sky', fontsize=16, pad=5)
+    colorbar_axis(axs[2], im2, label='counts / s')
  
     im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
-    axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    axs[3].set_title('scaled sky-sub science  (sci_cs_image - sky_scaled)', fontsize=12)
-    axs[3].set_xlabel('spectral channel', fontsize=12, labelpad=12)
-    colorbar_axis(axs[3], im3, label='counts')
+    # axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
+    axs[3].set_title(r'(D)  object $-$ scaled sky', fontsize=16, pad=5)
+    axs[3].set_xlabel('spectral channel', fontsize=14, labelpad=12)
+    colorbar_axis(axs[3], im3, label='counts / s')
+
+    fig.supylabel('fiber #', fontsize=14, x=0.05, y=0.5)
  
     fig.savefig(stub + '_sky_subtraction.png', dpi=180, format='png', bbox_inches='tight')
     plt.close(fig)
@@ -2440,11 +2445,11 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=Non
     hdu_wave.header['BUNIT'] = ('Angstrom', 'Wavelength unit')
     hdu_new.append(hdu_wave)
 
-    # --- 5 SPECRES ((median R across fibers) / 6 SPECRESD (1-sigma scatter) ---
-    res = work.get('resolution_fit')
+    # --- 5 SPECRES (median R across fibers) ---
+    res = work.get('specres_fit')
     if res is not None:
-        R = evaluate_resolution(res, work['we'])            # (3, N): median, 16th, 84th
-        hdu_res = fits.ImageHDU(data=R[0].astype(np.float32), name=SPECRES)
+        R = evaluate_resolution(res, work['we'])            # median R across fibres
+        hdu_res = fits.ImageHDU(data=R.astype(np.float32), name=SPECRES)
         hdu_res.header['EXTNAME'] = (SPECRES, 'median spectral resolution R = lambda/FWHM')
         hdu_res.header['BUNIT'] = ('', 'Dimensionless R = lambda / FWHM')
         for k in ('CRPIX1', 'CRVAL1', 'CDELT1', 'CTYPE1', 'CUNIT1'):
@@ -2453,17 +2458,13 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=Non
         write_resolution_header(hdu_res.header, res)
         hdu_new.append(hdu_res)
 
-        hdu_resd = fits.ImageHDU(data=((R[2] - R[1]) / 2.0).astype(np.float32), name='SPECRESD')
-        hdu_resd.header['EXTNAME'] = ('SPECRESD', '1-sigma scatter of R across fibers')
-        hdu_new.append(hdu_resd)
-
-    # --- 7 OBSINFO (observation metadata) ---
+    # --- 6 OBSINFO (observation metadata) ---
     hdu_obs = fits.ImageHDU(name='OBSINFO')
     hdu_obs.header.extend(orig, strip=True, update=True)   # copy obs keywords, drop structural cards
     hdu_obs.header['EXTNAME'] = ('OBSINFO', 'observation metadata')
     hdu_new.append(hdu_obs)
 
-    # --- 8 SKYCORR (sky model subtracted) ---
+    # --- 7 SKYCORR (sky model subtracted) ---
     if skycorr is not None:
         hdu_sky = fits.ImageHDU(data=np.asarray(skycorr, dtype=np.float32), name='SKYCORR')
         hdu_sky.header['EXTNAME'] = ('SKYCORR', 'sky model subtracted (cs - ss)')
@@ -2805,14 +2806,20 @@ def gaussian_1d(x, amplitude, mean, sigma, continuum=0.0):
     return amplitude * np.exp(-(x - mean)**2 / (2 * sigma**2)) + continuum
 
 # ---------------------------------------------------------------------------- #
-def fit_arc_lines(waves, flux, height=1000.0, win=13, max_sig_err=0.25):
+def narrow_line_fit(waves, flux, height_sigma=None, win=None, sigma_err_thresh=None):
 # ---------------------------------------------------------------------------- #
     '''
-    Fit arc lines in one rectified fibre. 
+    Fit narrow lines in a rectified fibre for spectral resolution measurement. 
     '''
-    peaks, _ = find_peaks(flux, height=height, distance=win)  # initial peak guesses
+    med = np.nanmedian(flux)
+    mad = 1.4826 * np.nanmedian(np.abs(flux - med))
+    height_thresh = med + height_sigma * mad
+    peaks, _ = find_peaks(flux, height=height_thresh, distance=win) # initial peak guesses
     lam, fwhm, fwhm_err = [], [], []
     for pk in peaks:
+        # skip if another detected peak sits inside this fit window, avoiding blended lines
+        if np.any((np.abs(peaks - pk) > 0) & (np.abs(peaks - pk) <= win)):
+            continue
         # define a window around peak
         lo = pk - win
         hi = pk + win + 1 
@@ -2827,16 +2834,27 @@ def fit_arc_lines(waves, flux, height=1000.0, win=13, max_sig_err=0.25):
         # compute error on fit
         perr = np.sqrt(np.diag(pcov))
         sigma_err = perr[2]
+
+        dw = abs(waves[1] - waves[0])
+        # reject noise spikes (sigma is too narrow) and blended lines (sigma is too broad)
+        if not (1.0 * dw < abs(sigma) < 0.25 * win * dw):
+            continue
         # if fit is unconstrained, skip peak
         if not np.all(np.isfinite(perr)): 
             continue
         # if width of peak is poorly constrained, skip peak
-        if sigma_err / abs(sigma) > max_sig_err: 
+        if sigma_err / abs(sigma) > sigma_err_thresh: 
+            continue
+        # if the fitted centre drifted off the detected peak, it is likely a blend
+        if abs(x0 - waves[pk]) > 0.5 * win * abs(waves[1] - waves[0]):
             continue
 
         # compute the FWHM of peak
-        fwhm.append(2.3548 * abs(sigma))
-        fwhm_err.append(2.3548 * sigma_err)
+        fwhm_val = 2.3548 * abs(sigma)
+        fwhm_err_val = 2.3548 * sigma_err
+
+        fwhm.append(fwhm_val)
+        fwhm_err.append(fwhm_err_val)
         # central wavelength
         lam.append(x0)
     return np.array(lam), np.array(fwhm), np.array(fwhm_err)
@@ -2865,23 +2883,24 @@ def fit_fwhm_polynomial(lam, fwhm, fwhm_err, deg=2, nclip=3):
 def compute_spectral_resolution(fibre_image, work, log):
 # ---------------------------------------------------------------------------- #
     '''
-    Compute spectral resolution from a rectified arc fibre image.
-    Fits arc lines per fibre, fits a smooth FWHM(lambda) polynomial per fibre, and returns the median coefficients across fibres.
+    Compute spectral resolution.
+    Fits skylines per fibre, fits a smooth FWHM(lambda) polynomial per fibre, and returns the median coefficients across fibres.
 
-    fibre_image: <array>  2D rectified arc flux (n_fibres, n_cols)
+    fibre_image: <array>  2D rectified sky flux (n_fibres, n_cols)
 
     return: <dict> {'coeffs', 'order', 'w_min', 'w_max', 'n_fibres'} or None
     '''
     waves = work['we'] 
-    height = work['resolution']['height']
-    win = work['resolution']['window']
-    order = work['resolution']['order']
+    height_sigma = work['specres']['height_sigma']
+    win = work['specres']['window']
+    sigma_err_thresh = work['specres']['sigma_err_thresh']
+    order = work['specres']['order']
 
     n_fibres = fibre_image.shape[0]
     coeffs, lam_min, lam_max = [], [], []
 
     for i in range(n_fibres):
-        lam, fwhm, fwhm_err = fit_arc_lines(waves, fibre_image[i], height=height, win=win)
+        lam, fwhm, fwhm_err = narrow_line_fit(waves, fibre_image[i], height_sigma=height_sigma, win=win, sigma_err_thresh=sigma_err_thresh)
         if len(lam) <= order:
             continue
 
@@ -2894,11 +2913,11 @@ def compute_spectral_resolution(fibre_image, work, log):
         lam_max.append(lam.max())
 
     if not coeffs:
-        log.message('   - resolution: no fibres yielded usable arc lines!', with_header=False)
+        log.message('   - resolution: no fibres yielded usable skylines!', with_header=False)
         return None
 
     # stack coefficients
-    coeff_stack = np.vstack(coeffs)              # (n_fibres, deg+1)
+    coeff_stack = np.vstack(coeffs)  # (n_fibres, deg+1)
 
     # wavelength range
     w_min = float(np.median(lam_min))
@@ -2918,34 +2937,26 @@ def compute_spectral_resolution(fibre_image, work, log):
 def evaluate_resolution(res, waves):
 # ---------------------------------------------------------------------------- #
     '''
-    Reconstruct resolution on a grid from stored FWHM polynomial coefficients.
-
-    Wavelengths outside the arc exposure wavelength coverage are interpolated
+    Reconstruct the median resolution R(lambda) across fibres from the stored
+    FWHM polynomial coefficients. Wavelengths outside the sky-line coverage are
+    interpolated.
     '''
-    coeffs = res['coeffs']  # resolution poly fit coefficients  # (n_fibres, deg+1)
+    coeffs = res['coeffs']  # FWHM poly coefficients, (n_fibres, deg+1)
 
-    # R(lambda) for every fibre: 
-    # FWHM = polyval(c, waves)
-    # R = waves / FWHM
+    # R(lambda) = waves / FWHM(waves) for every fibre
     fwhm_stack = np.vstack([np.polyval(c, waves) for c in coeffs])  # (n_fibres, N)
     R_stack = waves[None, :] / fwhm_stack
 
-    # mask wavelengths outside of the arc exposure's wavelength coverage
+    # mask wavelengths outside the sky-line coverage / with unphysical FWHM
     bad = (waves < res['w_min']) | (waves > res['w_max'])
     R_stack[:, bad] = np.nan
     R_stack[fwhm_stack <= 0] = np.nan
 
-    R = np.vstack([np.nanmedian(R_stack, axis=0),
-                   np.nanpercentile(R_stack, 16, axis=0),
-                   np.nanpercentile(R_stack, 84, axis=0)])
-
-    # interpolate over those regions
-    for k in range(R.shape[0]):
-        row = R[k]
-        good = np.isfinite(row)
-        if good.any() and not good.all():
-            row[~good] = np.interp(waves[~good], waves[good], row[good])
-        R[k] = row
+    # median across fibres, interpolating over any masked wavelengths
+    R = np.nanmedian(R_stack, axis=0)
+    good = np.isfinite(R)
+    if good.any() and not good.all():
+        R[~good] = np.interp(waves[~good], waves[good], R[good])
 
     return R
 
@@ -2960,9 +2971,9 @@ def write_resolution_header(header, res):
 
     deg = res['order']
     header['SPRESDEG'] = (deg, 'Spectral resolution FWHM poly degree')
-    header['SPRESWLO'] = (res['w_min'], 'Arc line coverage min wavelength')
-    header['SPRESWHI'] = (res['w_max'], 'Arc line coverage max wavelength')
-    header['SPRESNFB'] = (res['n_fibres'], 'Nr fibres used for resolution')
+    header['SPRESWLO'] = (res['w_min'], 'line coverage min wavelength')
+    header['SPRESWHI'] = (res['w_max'], 'line coverage max wavelength')
+    header['SPRESNFB'] = (res['n_fibres'], 'fibres used for resolution')
 
     # median polynomial fit coefficient
     coeff = np.median(np.atleast_2d(res['coeffs']), axis=0)

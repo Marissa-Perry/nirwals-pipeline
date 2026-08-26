@@ -157,10 +157,11 @@
     "smooth": {
         "arc": {"window_length": 5, "polyorder": 3}
     },
-    "resolution":{
-        "height": 1000.0,
+    "specres":{
+        "height_sigma": 10,
         "window": 13,
-        "order": 2
+        "sigma_err_thresh": 0.25,
+        "order": 1
     },
 
     "dark": {
