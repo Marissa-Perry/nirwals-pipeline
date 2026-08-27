@@ -387,9 +387,8 @@ def reduce_files(config_r, fits_files, log):
     # Dump exposures dictionary
     dump_exposures(work, log)
 
-    # Check if exposure type is arc, i.e., reference spectrum
-    if config_r['exp_type'] == 'arc':
-        # Dump wavelength solutions (as needed)
+    # Dump wavelength solutions after arc (creates them) and after sky (adds SPECRES)
+    if config_r['exp_type'] in ('arc', 'sky'):
         dump_wavelength_solutions(solutions, work, log)
 
     # Beautify log
@@ -844,6 +843,23 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     # Stack good pixels count image: fibre type 'all'
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
 
+    # Compute spectral resolution from this lamp's arc lines and attach it to the wavelength solution 
+    log.message(' - computing spectral resolution', with_header=False)
+    try:
+        res = compute_spectral_resolution(fibre_image, work, log)
+    except Exception as e:
+        log.message(f'   - resolution: failed for lamp {work["arc"].get("lamp", "?")} ({e}); skipping', with_header=False)
+        res = None
+    if res is not None:
+        specres = {k: v for k, v in res.items() if k != 'R'}
+        ws['specres'] = specres                 # writes SPECRES into the arc 'a'
+        work['specres_fit'] = res
+        # persist into every saved solution for this base config (BV suffix stripped)
+        base_config = work['db_config']
+        for key, saved in solutions['wrk']['solutions'].items():
+            if key.split('BV')[0] == base_config:
+                saved['specres'] = specres
+
     # Add rectified (wavelength calibrated) header key
     value = time.asctime(time.localtime())
     comment = 'Image has been wavelength calibrated'
@@ -907,16 +923,6 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     fibre_image = stack_fibre_image(traces, fibres)
     # Stack good pixels count image: fibre type 'all'
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
-
-    # if sky exposure, compute spectral resolution using skylines
-    if work['exp_type'] == 'sky':
-        # Compute spectral resolution from the rectified sky image
-        log.message(' - computing spectral resolution', with_header=False)
-        res = compute_spectral_resolution(fibre_image, work, log)
-        if res is not None:
-            # attach to the wavelength solution so it's dumped with the solution
-            ws['specres'] = {k: v for k, v in res.items() if k != 'R'} 
-            work['specres_fit'] = res
 
     # Add rectified (wavelength calibrated) header key
     value = time.asctime(time.localtime())
@@ -2816,17 +2822,21 @@ def narrow_line_fit(waves, flux, height_sigma=None, win=None, sigma_err_thresh=N
     height_thresh = med + height_sigma * mad
     peaks, _ = find_peaks(flux, height=height_thresh, distance=win) # initial peak guesses
     lam, fwhm, fwhm_err = [], [], []
+    n = flux.size
     for pk in peaks:
-        # skip if another detected peak sits inside this fit window, avoiding blended lines
-        if np.any((np.abs(peaks - pk) > 0) & (np.abs(peaks - pk) <= win)):
-            continue
-        # define a window around peak
+        # define a window around peak; skip peaks too close to either edge
         lo = pk - win
-        hi = pk + win + 1 
+        hi = pk + win + 1
+        if lo < 0 or hi > n:
+            continue
+        # require finite data across the window before fitting
+        wseg, fseg = waves[lo:hi], flux[lo:hi]
+        if wseg.size == 0 or not np.any(np.isfinite(fseg)):
+            continue
         # initial guesses for the fit
         p0 = [flux[pk], waves[pk], 2 * (waves[1] - waves[0]), 0.0]
         try:
-            (a, x0, sigma, continuum), pcov = curve_fit(gaussian_1d, waves[lo:hi], flux[lo:hi], p0=p0)
+            (a, x0, sigma, continuum), pcov = curve_fit(gaussian_1d, wseg, fseg, p0=p0)
         # failed to converge, skip peak
         except RuntimeError:
             continue
@@ -2834,11 +2844,6 @@ def narrow_line_fit(waves, flux, height_sigma=None, win=None, sigma_err_thresh=N
         # compute error on fit
         perr = np.sqrt(np.diag(pcov))
         sigma_err = perr[2]
-
-        dw = abs(waves[1] - waves[0])
-        # reject noise spikes (sigma is too narrow) and blended lines (sigma is too broad)
-        if not (1.0 * dw < abs(sigma) < 0.25 * win * dw):
-            continue
         # if fit is unconstrained, skip peak
         if not np.all(np.isfinite(perr)): 
             continue
@@ -2900,7 +2905,11 @@ def compute_spectral_resolution(fibre_image, work, log):
     coeffs, lam_min, lam_max = [], [], []
 
     for i in range(n_fibres):
-        lam, fwhm, fwhm_err = narrow_line_fit(waves, fibre_image[i], height_sigma=height_sigma, win=win, sigma_err_thresh=sigma_err_thresh)
+        try:
+            lam, fwhm, fwhm_err = narrow_line_fit(waves, fibre_image[i], height_sigma=height_sigma, win=win, sigma_err_thresh=sigma_err_thresh)
+        except (ValueError, RuntimeError):
+            # if no fittable lines, shouldn't abort the frame
+            continue
         if len(lam) <= order:
             continue
 
@@ -2937,9 +2946,8 @@ def compute_spectral_resolution(fibre_image, work, log):
 def evaluate_resolution(res, waves):
 # ---------------------------------------------------------------------------- #
     '''
-    Reconstruct the median resolution R(lambda) across fibres from the stored
-    FWHM polynomial coefficients. Wavelengths outside the sky-line coverage are
-    interpolated.
+    Reconstruct the median resolution R(lambda) across fibres from the stored FWHM polynomial coefficients. 
+    Wavelengths outside the line coverage are interpolated.
     '''
     coeffs = res['coeffs']  # FWHM poly coefficients, (n_fibres, deg+1)
 

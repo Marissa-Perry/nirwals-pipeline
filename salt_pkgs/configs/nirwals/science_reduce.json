@@ -158,9 +158,9 @@
         "arc": {"window_length": 5, "polyorder": 3}
     },
     "specres":{
-        "height_sigma": 10,
+        "height_sigma": 5,
         "window": 13,
-        "sigma_err_thresh": 0.25,
+        "sigma_err_thresh": 0.05,
         "order": 1
     },
 
