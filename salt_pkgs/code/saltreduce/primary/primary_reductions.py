@@ -260,8 +260,7 @@ def combine_flats(obs_date):
 # --------------------------------------------------------------------------- #
 #  dark subtraction
 # --------------------------------------------------------------------------- #
-
-def set_dark_file(exp_time, prd_dir, obs_date, subtract=True, tol=3.0):
+def set_dark_file(exp_time, prd_dir, obs_date, subtract=True, tol=5.0):
     """
     Find master dark with the same EXPTIME as the current frame.
     """
