@@ -18,8 +18,14 @@ def run_workflow(obs_date, workflow_filepath=None, with_stdout=True, only_stdout
     work_dir = os.path.abspath(work_rel_path)
     saltdata_dir = ''  # need saltdata_dir for nirwalsreduce to read, but do not have salt archive on local machine
 
-    # if no work directory, make one
-    os.makedirs(work_dir, exist_ok=True)
+    # if no directory structure for this observation date, make it
+    nirwals = os.path.join(work_dir, 'nirwals')
+    NIRWALS_work = os.path.join(nirwals,'NIRWALS_work')
+    prd = os.path.join(nirwals,'product')
+    raw = os.path.join(nirwals,'raw')
+    os.makedirs(NIRWALS_work, exist_ok=True)  # will also initialize "YYYYMMDD/nirwals" parent directory
+    os.makedirs(prd, exist_ok=True)
+    os.makedirs(raw, exist_ok=True)
 
     # run primary reductions
     if run_primary:
