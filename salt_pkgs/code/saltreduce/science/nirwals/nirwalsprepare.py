@@ -390,7 +390,7 @@ def generate_bpm(obs_date, log, **kwargs):
                 # Take whichever value is present and copy it into any of the keys that are missing.
                 gr_angle = next((header[k] for k in ('GR-ANGLE', 'GRRANGLE', 'GRTILT') if k in header_keys), None)
                 if gr_angle is not None:
-                    for k in ('GR-ANGLE', 'GRTILT'):
+                    for k in ('GR-ANGLE', 'GRTILT', 'GRRANGLE'):
                         if k not in header_keys:
                             header[k] = (gr_angle, 'Grating angle (copied from another grating angle key)')
 
