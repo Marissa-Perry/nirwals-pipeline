@@ -381,13 +381,28 @@ def generate_bpm(obs_date, log, **kwargs):
                 # append updated BPM
                 hdul.append(bpm_hdu)
                 # -----------------------------
-                # ----- backfill header keys missing from raw NIRWALS data -----
+                # ----- fix header keys missing from raw NIRWALS data -----
                 header = hdul['PRIMARY'].header
                 header_keys = list(header.keys())
-                if 'AR-ANGLE' not in header_keys and 'CAMANG' in header_keys:
-                    header['AR-ANGLE'] = (header['CAMANG'], 'Articulation angle [degrees] (copied from CAMANG)')
-                if 'GR-ANGLE' not in header_keys and 'GRRANGLE' in header_keys:
-                    header['GR-ANGLE'] = (header['GRRANGLE'], 'Grating angle (encoder) (copied from GRRANGLE)')
+                # GR-ANGLE, GRRANGLE, and GRTILT are the same grating angle value
+                # AR-ANGLE and CAMANG are the same camera angle value
+                # for NIRWALS the camera angle is always 2x the grating angle. 
+                # Take whichever value is present and copy it into any of the keys that are missing.
+                gr_angle = next((header[k] for k in ('GR-ANGLE', 'GRRANGLE', 'GRTILT') if k in header_keys), None)
+                if gr_angle is not None:
+                    for k in ('GR-ANGLE', 'GRTILT'):
+                        if k not in header_keys:
+                            header[k] = (gr_angle, 'Grating angle (copied from another grating angle key)')
+
+                cam_angle = next((header[k] for k in ('AR-ANGLE', 'CAMANG') if k in header_keys), None)
+                if cam_angle is None and gr_angle is not None:
+                    cam_angle = 2 * gr_angle
+                if cam_angle is not None:
+                    for k in ('AR-ANGLE', 'CAMANG'):
+                        if k not in header_keys:
+                            header[k] = (cam_angle, 'Camera angle (copied/derived as 2x grating angle)')
+                if 'GRATING' not in header_keys:
+                    header['GRATING'] = ('NG950', 'Grating name (NIRWALS has a single fixed grating)')
                 if 'DISPAXIS' not in header_keys:
                     header['DISPAXIS'] = (1, 'Dispersion axis (0=vertical, 1=horizontal)')
                 if 'PIXSUM' not in header_keys:
