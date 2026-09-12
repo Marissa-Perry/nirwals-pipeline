@@ -180,16 +180,20 @@ def generate_bpm(obs_date, log, **kwargs):
 
         # ---------- FLAGS union: from every individual reduced exposure ----------
         # per-exposure ramp-fit flags live only on the individual frames, so read
-        # them here to preserve "flagged in ANY exposure that night"
+        # them here to preserve "flagged in ANY exposure that night".
+        # Some observations lack a FLAGS extension entirely; those are skipped.
+        if not data_files:
+            raise RuntimeError(f'No reduced files found for {obs_date}')
+
         flag_union = None
         for file in data_files:
             with fits.open(file) as hdul:
+                if 'FLAGS' not in hdul:
+                    continue
                 flags = hdul['FLAGS'].data
                 if flag_union is None:
                     flag_union = np.zeros_like(flags)
                 flag_union[flags == 1] = 1
-        if flag_union is None:
-            raise RuntimeError(f'No reduced files found for {obs_date}')
 
         # ---------- locate combined masters ----------
         dark_wildcard = os.path.join(prd_dir, '{0}{1}Dark*.fits'.format(prefix, obs_date))
@@ -212,21 +216,24 @@ def generate_bpm(obs_date, log, **kwargs):
         bpm = np.zeros(master_flat.shape, dtype=np.float32)
 
         # ---------- component 1: up-the-ramp-fit flags ----------
-        bpm[flag_union == 1] = 1.
-        bad_flag_perc = (flag_union.sum() / flag_union.size) * 100
+        if flag_union is None:
+            log.message('   - no FLAGS extension found in any reduced file; skipping flag component', with_header=False)
+        else:
+            bpm[flag_union == 1] = 1.
+            bad_flag_perc = (flag_union.sum() / flag_union.size) * 100
 
-        plt.figure(figsize=(10,5))
-        plt.title(f'flagged pixels, {bad_flag_perc:.1f}% bad', fontsize=12, pad=15)
-        plt.imshow(flag_union, origin='lower', cmap='Greys_r', vmin=0, vmax=1)
-        # Set png file
-        plot_dir = os.path.join(bpm_dir,'plots')
-        os.makedirs(plot_dir, exist_ok=True)
-        png_file = 'flag_image.png'
-        # Add bpm directory path to png file
-        filepath = os.path.join(plot_dir, png_file)
-        # Save plot as png
-        plt.savefig(filepath, dpi=150, format='png', bbox_inches="tight")
-        plt.close()
+            plt.figure(figsize=(10,5))
+            plt.title(f'flagged pixels, {bad_flag_perc:.1f}% bad', fontsize=12, pad=15)
+            plt.imshow(flag_union, origin='lower', cmap='Greys_r', vmin=0, vmax=1)
+            # Set png file
+            plot_dir = os.path.join(bpm_dir,'plots')
+            os.makedirs(plot_dir, exist_ok=True)
+            png_file = 'flag_image.png'
+            # Add bpm directory path to png file
+            filepath = os.path.join(plot_dir, png_file)
+            # Save plot as png
+            plt.savefig(filepath, dpi=150, format='png', bbox_inches="tight")
+            plt.close()
 
         # ---------- component 2: master darks ------------
         bpm_dark = np.zeros(bpm.shape, dtype=bool)
@@ -301,7 +308,7 @@ def generate_bpm(obs_date, log, **kwargs):
         bpm_flat[illum] = (np.abs(z[illum]) > bpm_thresh_sigma * z_scatter)  # identifying bad pixels
         bpm[bpm_flat] = 1.
         flat_bpm_perc = 100 * bpm_flat.sum() / illum.sum()
-        log.message('   - flat BPM: {0:.2f}% flagged over illuminated pixels (smooth_k={1}, {2}sigma)'.format(flat_bpm_perc, smooth_k, bpm_thresh_sigma), with_header=False)
+        log.message('   - flat BPM: {0:.2f}% flagged', with_header=False)
 
         # ---------- diagnostic: noise-normalised flat deviation ----------
         zvals = z[illum]
@@ -374,12 +381,17 @@ def generate_bpm(obs_date, log, **kwargs):
                 # append updated BPM
                 hdul.append(bpm_hdu)
                 # -----------------------------
-                # ----- check AR-ANGLE hdu -------
+                # ----- backfill header keys missing from raw NIRWALS data -----
                 header = hdul['PRIMARY'].header
                 header_keys = list(header.keys())
-                # add AR-ANGLE if missing (use CAMANG value)
                 if 'AR-ANGLE' not in header_keys and 'CAMANG' in header_keys:
                     header['AR-ANGLE'] = (header['CAMANG'], 'Articulation angle [degrees] (copied from CAMANG)')
+                if 'GR-ANGLE' not in header_keys and 'GRRANGLE' in header_keys:
+                    header['GR-ANGLE'] = (header['GRRANGLE'], 'Grating angle (encoder) (copied from GRRANGLE)')
+                if 'DISPAXIS' not in header_keys:
+                    header['DISPAXIS'] = (1, 'Dispersion axis (0=vertical, 1=horizontal)')
+                if 'PIXSUM' not in header_keys:
+                    header['PIXSUM'] = ('1 1', 'CCD pixel summing (x y)')
                 # --------------------------------
 
         except Exception as e:
