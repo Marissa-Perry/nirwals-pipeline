@@ -243,7 +243,18 @@
         "c. n_sigma and n_iter set the iterative residual sigma-clipping that stops bright line cores from dragging the fit"
         ],
         "n_sigma": 3,
-        "n_iter": 3
+        "n_iter": 3,
+        "continuum": {
+            "notes": [
+                "a. sky-continuum offset from the faintest fibres, same for every fibre;",
+                "b. min_faint_fibers = fallback to no correction if too few faint fibres;",
+                "c. wave_tol = max sci/sky wavelength mismatch allowed before skipping"
+            ],
+            "enable": 1,
+            "faint_frac": 0.05,
+            "min_faint_fibers": 5,
+            "wave_tol": 1.0e-2
+        }
     },
 
     "config_key": {

@@ -1839,6 +1839,65 @@ def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter)
     return scale
 
 
+def sky_continuum_residual_scale(sci_cf_image, sky_cf_image, sky_cf_wave, image_mask, work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    Per-wavelength additive correction for the sky continuum, estimated from
+    the faintest fibers: delta[wavelength] = mean(sci_cf) - mean(sky_cf) over
+    those fibers. Applied uniformly to every fiber.
+
+    return (delta, n_faint), or (None, 0) if disabled, the sky wavelength grid
+    doesn't match work['we'], or too few fibers have a valid continuum level.
+    '''
+    cfg = work['sky_scaling']['continuum']
+
+    if not cfg['enable']:
+        return None, 0
+
+    # sci_cf_image and sky_cf_image are assumed to share a wavelength grid
+    # (true whenever both exposures share wrk_config); checked, not trusted
+    we = work['we']
+    if (sky_cf_wave is None or sky_cf_wave.shape != we.shape
+            or not np.allclose(we, sky_cf_wave, atol=cfg['wave_tol'])):
+        msg = '   - sky continuum residual: sky wavelength grid mismatch; skipping'
+        log.message(msg, with_header=False)
+        return None, 0
+
+    # valid columns: not masked (dead/curved edges), not zero-padded on either side
+    valid = image_mask & (sci_cf_image != 0) & (sky_cf_image != 0)
+
+    # rank fibers by their own mean continuum level, over valid columns only
+    mean_per_fiber = np.nanmean(np.where(valid, sci_cf_image, np.nan), axis=1)
+    good_fibers = np.where(np.isfinite(mean_per_fiber))[0]
+
+    if good_fibers.size < cfg['min_faint_fibers']:
+        msg = ('   - sky continuum residual: only {0} fibers with valid continuum '
+               '(need {1}); skipping').format(good_fibers.size, cfg['min_faint_fibers'])
+        log.message(msg, with_header=False)
+        return None, 0
+
+    # faintest fraction of the good fibers
+    n_faint = min(max(int(round(cfg['faint_frac'] * good_fibers.size)), cfg['min_faint_fibers']),
+                  good_fibers.size)
+    faint = good_fibers[np.argsort(mean_per_fiber[good_fibers])][:n_faint]
+
+    # per-column mean over the faint fibers, for object and sky continuum fits
+    delta = (np.nanmean(np.where(valid[faint], sci_cf_image[faint], np.nan), axis=0)
+             - np.nanmean(np.where(valid[faint], sky_cf_image[faint], np.nan), axis=0))
+
+    # columns with no valid faint-fiber pixels at all get no correction
+    n_bad_cols = int(np.sum(~np.isfinite(delta)))
+    delta = np.nan_to_num(delta, nan=0.0)
+
+    msg = ('   - sky continuum residual: delta from {0} faintest fibers '
+           '(median={1:.4g}, {2} column(s) unconstrained)').format(
+               n_faint, np.median(delta), n_bad_cols)
+    log.message(msg, with_header=False)
+
+    return delta, n_faint
+
+
+# ---------------------------------------------------------------------------- #
 def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
 # ---------------------------------------------------------------------------- #
 
@@ -1867,6 +1926,8 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
 
     # Initialise sky continuum fit image
     sky_cf_image = None
+    # Initialise sky continuum fit wavelength array
+    sky_cf_wave = None
 
     # Loop for sky continuum fit entries...
     for sky_cf in work['exposures']['sky'][work['wrk_config']]['cf']:
@@ -1878,6 +1939,9 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
             if product_object(skyhdu) == trg_name:
                 # Set sky continuum fit image
                 sky_cf_image = product_flux_data(skyhdu).copy()
+                # Set sky continuum fit wavelength array
+                if 'WAVE' in skyhdu:
+                    sky_cf_wave = skyhdu['WAVE'].data.copy()
                 break
 
     # Check sky continuum fit image
@@ -1926,6 +1990,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
             if product_object(skyhdu) == trg_name:
                 # Set sky spectral channels fit image
                 sky_sf_image = product_flux_data(skyhdu).copy()
+                break
 
     # Check sky spectral channels fit image
     if sky_sf_image is None:
@@ -1961,19 +2026,48 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, work, log):
     sky_scaled = sky_cs_image * scaling_image_masked
     sci_image = sci_cs_image - sky_scaled
 
-    # Add continuum back in
+    # Scale the sky continuum to match the object frame, then add continuum back in
+    delta, n_faint = sky_continuum_residual_scale(sci_cf_image, sky_cf_image, sky_cf_wave, work['image_mask'], work, log)
+    if delta is not None:
+        sky_cf_image = sky_cf_image + delta[None, :]
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image)
 
     # Diagnostic plots of the sky-line scale terms and their effect on the subtraction
     skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled)
     skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask)
+    if delta is not None:
+        sky_continuum_residual_plot(work, delta, n_faint)
 
-    # Add sky subtracted header key
+    # Add sky subtracted header key, noting whether continuum scaling was included
     value = time.asctime(time.localtime())
-    comment = 'Image has been sky subtracted'
+    comment = ('Image has been sky (line + continuum) subtracted' if delta is not None
+               else 'Image has been sky (line) subtracted; sky continuum scaling failed')
     hdu['Primary'].header['SKYSUB'] = (value, comment)
 
     return sci_image, sci_image_with_cont, sky_scaled, sky_cf_image
+
+
+# ---------------------------------------------------------------------------- #
+def sky_continuum_residual_plot(work, delta, n_faint):
+# ---------------------------------------------------------------------------- #
+    '''
+    plotting the sky-continuum residual delta vs wavelength.
+    '''
+    plt.figure(figsize=(8, 4))
+    plt.title(f'sky continuum residual ({n_faint} faintest fibers)', fontsize=15, pad=15)
+    plt.axhline(0, color='grey', lw=0.8, ls='--')
+    plt.step(work['we'], delta, where='mid', color='tab:red', lw=0.8)
+    plt.xlabel(r'Wavelength [$\AA$]', fontsize=13, labelpad=15)
+    plt.ylabel(r'$\Delta$ [counts / s]', fontsize=13, labelpad=15)
+
+    plot_dir = os.path.join(work['output']['dir'], 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    png_file = '{0}_sky_continuum_residual.png'.format(work['file'])
+    filepath = os.path.join(plot_dir, png_file)
+    plt.savefig(filepath, dpi=180, format='png', bbox_inches='tight')
+    plt.close()
+
+    return
 
 
 # ---------------------------------------------------------------------------- #
@@ -2473,7 +2567,7 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=Non
     # --- 7 SKYCORR (sky model subtracted) ---
     if skycorr is not None:
         hdu_sky = fits.ImageHDU(data=np.asarray(skycorr, dtype=np.float32), name='SKYCORR')
-        hdu_sky.header['EXTNAME'] = ('SKYCORR', 'sky model subtracted (cs - ss)')
+        hdu_sky.header['EXTNAME'] = ('SKYCORR', 'sky (line + continuum) model subtracted')
         hdu_new.append(hdu_sky)
 
     hdu_new[0].header['NEXTEND'] = (len(hdu_new) - 1, 'Number of data extensions')
