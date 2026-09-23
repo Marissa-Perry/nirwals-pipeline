@@ -200,6 +200,14 @@
                 "b. all row masks constitute 'image_mask' which is used to mask columns in spectral channels fit"
             ]
         },
+        "sky_bundle": {
+            "sigma_clip": {},
+            "fit": {"function": "legendre", "order": 8, "low_reject": 3, "high_reject": 3, "niter": 10},
+            "notes": [
+                "a. fits the median of the 36 sky-bundle fibres' raw flux, one fit per exposure;",
+                "b. symmetric low/high_reject=3, appropriate for faint, low-S/N sky-bundle flux"
+            ]
+        },
         "gpm": {
                 "threshold": {
                     "type": "auto",
@@ -246,14 +254,12 @@
         "n_iter": 3,
         "continuum": {
             "notes": [
-                "a. sky-continuum offset from the faintest fibres, same for every fibre;",
-                "b. min_faint_fibers = fallback to no correction if too few faint fibres;",
-                "c. wave_tol = max sci/sky wavelength mismatch allowed before skipping"
+                "a. scales the sky continuum fit by the ratio of the object/sky sky-bundle continuum fits;",
+                "b. wherever either sky-bundle continuum fit is negative, the ratio is left unscaled (factor 1) instead;",
+                "c. min_sky_fibers = skip scaling if too few sky-bundle fibres have valid continuum"
             ],
             "enable": 1,
-            "faint_frac": 0.05,
-            "min_faint_fibers": 5,
-            "wave_tol": 1.0e-2
+            "min_sky_fibers": 10
         }
     },
 
