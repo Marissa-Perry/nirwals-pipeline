@@ -47,6 +47,7 @@ from ...functions import air_to_vac
 from ...functions import get_evenly_spaced_array
 # - spectroscopy.ifu
 from ...spectroscopy.ifu import extract_fibres
+from ...spectroscopy.ifu import get_plot_dir
 # - spectroscopy.spectrograph
 from ...spectroscopy.spectrograph import set_spectrograph
 # - spectroscopy.spectrum
@@ -1723,8 +1724,7 @@ def continuum_fit_mask_diagnostic_plot(work, xarr, mask):
     plt.ylabel('fiber #', fontsize=12, labelpad=15)
     
     # Set png file
-    plot_dir = os.path.join(work['output']['dir'],'plots')
-    os.makedirs(plot_dir, exist_ok=True)
+    plot_dir = get_plot_dir(work, 'continuum_fitting')
     png_file = '{0}_continuum_fit_mask.png'.format(work['file'])
     # Add output directory path to png file
     filepath = os.path.join(plot_dir, png_file)
@@ -1760,8 +1760,7 @@ def spec_channel_fit_diagnostic_plot(work, input_flux, fit_flux, mask, col):
     plt.legend(fontsize=12)
 
     # Set png file
-    plot_dir = os.path.join(work['output']['dir'],'plots')
-    os.makedirs(plot_dir, exist_ok=True)
+    plot_dir = get_plot_dir(work, 'continuum_fitting')
     png_file = '{0}_sky_fit_column_{1:04d}.png'.format(work['file'], col)
     # Add output directory path to png file
     filepath = os.path.join(plot_dir, png_file)
@@ -2078,8 +2077,7 @@ def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw
     ax4.set_title('object-bundle, sky-frame continuum', fontsize=15, pad=13)
     ax4.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
 
-    plot_dir = os.path.join(work['output']['dir'], 'plots')
-    os.makedirs(plot_dir, exist_ok=True)
+    plot_dir = get_plot_dir(work, 'sky_subtraction')
     png_file = '{0}_sky_continuum_scaling.png'.format(work['file'])
     filepath = os.path.join(plot_dir, png_file)
     plt.savefig(filepath, dpi=180, format='png', bbox_inches='tight')
@@ -2155,9 +2153,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     n_line_per_fibre = line_mask.sum(axis=1)    # per fibre            (max = n_chan)
  
     # Output directory / filename stub (same pattern as the other plots)
-    plot_dir = os.path.join(work['output']['dir'], 'plots')
-    os.makedirs(plot_dir, exist_ok=True)
-    stub = os.path.join(plot_dir, work['file'])
+    stub = os.path.join(get_plot_dir(work, 'sky_subtraction'), work['file'])
  
     # Sequential colormap whose 'bad' (NaN) value renders white, for the panels
     # where interline regions are masked out
@@ -2300,8 +2296,7 @@ def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask):
     plt.ylabel('avg sky-subtracted pixel', fontsize=12, labelpad=15)
     plt.legend(fontsize=12)
     # Set png file
-    plot_dir = os.path.join(work['output']['dir'],'plots')
-    os.makedirs(plot_dir, exist_ok=True)
+    plot_dir = get_plot_dir(work, 'sky_subtraction')
     png_file = '{0}_residual_sky_vs_fiber_threshold_0.5.png'.format(work['file'])
     # Add output directory path to png file
     filepath = os.path.join(plot_dir, png_file)
@@ -3162,8 +3157,7 @@ def plot_wavelength_fit(ws, work, log):
     # Save figure
     if plot_dict['save']:
         # Set png file
-        plot_dir = os.path.join(work['output']['dir'],'plots')
-        os.makedirs(plot_dir, exist_ok=True)
+        plot_dir = get_plot_dir(work, 'wavelength_calibration')
         png_file = '{0}_wavelength_fit.png'.format(work['file'])
         # Add output directory path to png file
         filepath = os.path.join(plot_dir, png_file)
@@ -3306,8 +3300,7 @@ def plot_zero_points_fit(ws, work, log):
     # Save figure
     if plot_dict['save']:
         # Set png file
-        plot_dir = os.path.join(work['output']['dir'],'plots')
-        os.makedirs(plot_dir, exist_ok=True)
+        plot_dir = get_plot_dir(work, 'wavelength_calibration')
         png_file = '{0}_zps_fit.png'.format(work['file'])
         # Add output directory path to png file
         filepath = os.path.join(plot_dir, png_file)

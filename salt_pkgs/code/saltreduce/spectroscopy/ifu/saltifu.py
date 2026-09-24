@@ -362,6 +362,16 @@ def extract_fibre_boxcar(sciarr, gpmarr, fltarr):
     return sciarr
 
 # ---------------------------------------------------------------------------- #
+def get_plot_dir(work, category):
+# ---------------------------------------------------------------------------- #
+    '''
+    Per-exposure, per-category plot directory: <output_dir>/plots/<exposure file stub>/<category>
+    '''
+    plot_dir = os.path.join(work['output']['dir'], 'plots', work['file'], category)
+    os.makedirs(plot_dir, exist_ok=True)
+    return plot_dir
+
+# ---------------------------------------------------------------------------- #
 def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, work):
 # ---------------------------------------------------------------------------- #
     '''
@@ -454,16 +464,45 @@ def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, ape
         if j == 0: 
             axP.set_ylabel('norm values', fontsize=11, labelpad=12)
             axA.set_ylabel('weight', fontsize=9, labelpad=15)
-            axM.set_ylabel('# good pix', fontsize=9, labelpad=15)
+            axM.set_ylabel('# good pixels', fontsize=9, labelpad=15)
             axP.legend(fontsize=10, loc='upper left')
         else:
             for ax in (axP, axA, axM):
                 plt.setp(ax.get_yticklabels(), visible=False)
 
-    plot_dir = os.path.join(work['output']['dir'], 'plots')
-    os.makedirs(plot_dir, exist_ok=True)
+    plot_dir = get_plot_dir(work, 'extracted_spectra')
     out_file = os.path.join(plot_dir, '{0}_extraction_debug_fibre{1}.png'.format(work['file'], id))
-    plt.savefig(out_file, dpi=300, format='png', bbox_inches='tight')
+    plt.savefig(out_file, dpi=180, format='png', bbox_inches='tight')
+    plt.close(fig)
+
+# ---------------------------------------------------------------------------- #
+def plot_fibre_extraction(work, id, fibre_type, spectrum, gpm_per_col):
+# ---------------------------------------------------------------------------- #
+    '''
+    Top: extracted spectrum for a single fibre, using the exposure's configured extraction method.
+    Bottom: good-pixel count per wavelength column.
+    '''
+    cols = np.arange(spectrum.shape[0])
+
+    fig, (axS, axC) = plt.subplots(2, 1, figsize=(10, 4), sharex=True, gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.0})
+
+    bundle = 'sky-bundle' if fibre_type == 'sky' else 'object-bundle'
+    axS.set_title(f'fibre #{id} ({bundle})', fontsize=15, pad=13)
+    axS.step(cols, spectrum, where='mid', lw=0.5, color='black')
+    axS.axhline(0, linestyle='dashed', lw=0.8, color='grey')
+    axS.set_ylabel('[counts / s]', fontsize=12, labelpad=12)
+    m = np.isfinite(spectrum)
+    axS.set_ylim(-3, np.nanpercentile(spectrum[m], 98))
+    plt.setp(axS.get_xticklabels(), visible=False)
+
+    axC.fill_between(cols, 0, gpm_per_col, step='mid', color='grey', alpha=0.8)
+    axC.set_ylim(0, gpm_per_col.max() + 1)
+    axC.set_ylabel('# good pixels', fontsize=10, labelpad=15)
+    axC.set_xlabel('wavelength column', fontsize=14, labelpad=15)
+
+    plot_dir = get_plot_dir(work, 'extracted_spectra')
+    out_file = os.path.join(plot_dir, '{0}_extraction_fibre{1}.png'.format(work['file'], id))
+    plt.savefig(out_file, dpi=180, format='png', bbox_inches='tight')
     plt.close(fig)
 
 # ---------------------------------------------------------------------------- #
@@ -512,6 +551,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, traces, gain, read_noise, work, 
 
     ###### DEBUGGING ########
     fiber_to_debug = '050'
+    plot_all_fibre_extractions = True
     #########################
 
     # Initialise extracted fibres and good pixels dictionaries
@@ -584,6 +624,11 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, traces, gain, read_noise, work, 
 
         # Store good-pixel count for this fibre
         good_pixels[id] = gpmarr
+
+        ######################## PER-FIBRE EXTRACTION PLOT  ###################
+        if plot_all_fibre_extractions:
+            plot_fibre_extraction(work, id, fibre.get('type', 'object'), fibres[id], gpmarr)
+        #########################################################################
 
     return fibres, good_pixels
 
