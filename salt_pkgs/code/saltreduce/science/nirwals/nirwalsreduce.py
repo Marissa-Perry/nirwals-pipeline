@@ -45,6 +45,8 @@ from .....saltutility.logging import logging
 from ...functions import Fit1D
 from ...functions import air_to_vac
 from ...functions import get_evenly_spaced_array
+# - primary
+from ...primary import set_dark_file
 # - spectroscopy.ifu
 from ...spectroscopy.ifu import extract_fibres
 from ...spectroscopy.ifu import get_plot_dir
@@ -637,12 +639,26 @@ def extract_fibres_from_image(hdu, traces, work, log):
         # Set flat field or flat field continuum fit with gpm applied
         flt *= gpm
 
+    # initialise dark-rate image
+    dark_rate = None
+    # Check if dark rate is needed (optimal extraction)
+    need_dark = (method == 'optimal')
+    if need_dark and (work['flat']['reference'] is not None):
+        prd_dir = os.path.dirname(work['flat']['reference'])
+        exp_time = hdu[PRIMARY].header['EXPTIME']
+        dark_file = set_dark_file(exp_time, prd_dir, work['obs_date'])
+        # Open matching master dark file
+        with fits.open(dark_file) as dh:
+            dark_rate = np.asarray(dh[SCI].data, dtype=np.float32)
+        # ensure non-negative dark rate
+        dark_rate = np.clip(dark_rate, 0.0, None)
+
     # set gain and read noise from headers
     gain = hdu[PRIMARY].header['GAIN']
     read_noise = set_read_noise(hdu, work)
 
     # fiber extraction
-    fibres, good_pixels = extract_fibres(sci, sci_unmasked, gpm, flt, traces, gain, read_noise, work, log)
+    fibres, good_pixels = extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_noise, work, log)
 
     # Set good pixels dictionary in work dictionary
     work['good_pixels'] = good_pixels
