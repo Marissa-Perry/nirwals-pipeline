@@ -296,7 +296,19 @@ def trace_fibres(traces, fibres, windows, work, log):
     return True, traces
 
 # ---------------------------------------------------------------------------- #
-def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark_rate):
+def renormalize_good_pixels(arr, good_count, expected_count, valid):
+# ---------------------------------------------------------------------------- #
+    '''
+    Rescale for signal lost by masked pixels. 
+    Divide by good-pixel count, then rescale back up by the expected count.
+    '''
+    expected_count = np.broadcast_to(expected_count, arr.shape)
+    out = arr.copy()
+    out[valid] = out[valid] / good_count[valid] * expected_count[valid]
+    return out
+
+# ---------------------------------------------------------------------------- #
+def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark_rate, smooth_params):
 # ---------------------------------------------------------------------------- #
     '''
     Horne 1986 optimal extraction method.
@@ -323,18 +335,34 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     F_e[good] = num[good] / den[good]      # [e-]
     F = F_e / gain                         # [e-] --> [counts] 
 
-    # flat-field  using mean-normalised flat spectrum (same as boxcar extraction method)
+    # flat-field extracted spectra
     flt_col_sums = flt_ap.sum(axis=0)    # sum across fibers
-    flt_mean = np.nanmean(flt_col_sums[flt_col_sums != 0])
-    flt_mean_norm = flt_col_sums / flt_mean
-    good = flt_mean_norm != 0
-    F[good] = F[good] / flt_mean_norm[good]
+    n_good = (aperture_weight * gpm).sum(axis=0)
+    n_expected = aperture_weight.sum(axis=0)
+    # Renormalize flat by number of good pixels per wavelength bin
+    flt_col_sums = renormalize_good_pixels(flt_col_sums, n_good, n_expected, n_good > 0)
+
+    cols = np.arange(flt_col_sums.shape[0])
+    valid = flt_col_sums > 0
+    try:
+        # fit a smooth model to the lamp/throughput shape of the raw master flat
+        cf = Fit1D(cols[valid], flt_col_sums[valid], **smooth_params)
+        smooth_fit = np.clip(cf(cols), 0.0, None)
+    except SALTError:
+        smooth_fit = flt_col_sums.copy()
+    response = np.ones_like(flt_col_sums)
+    nz = smooth_fit > 0
+    # then divide it out
+    response[nz] = flt_col_sums[nz] / smooth_fit[nz]
+    good = response != 0
+    # leftover pixel-to-pixel response used to flat-field extracted spectra
+    F[good] = F[good] / response[good]
 
     F[~np.isfinite(F)] = 0.0
     return F
 
 # ---------------------------------------------------------------------------- #
-def extract_fibre_boxcar(sciarr, gpmarr, fltarr):
+def extract_fibre_boxcar(sciarr, gpmarr, fltarr, smooth_params):
 # ---------------------------------------------------------------------------- #
     '''
     Boxcar extraction with flat-fielding and good-pixel renormalization.
@@ -342,23 +370,34 @@ def extract_fibre_boxcar(sciarr, gpmarr, fltarr):
     '''
     non_nan = ~np.isnan(sciarr)
 
+    # flat-field extracted spectra
     # Check flat field image array
     if fltarr is not None:
-        # Linearly transform intensity scale (bscale)
-        fltarr[non_nan] /= fltarr[non_nan].mean()
-        # Set combined non NaN science and non zero flat mask
-        mask = (non_nan) * (fltarr != 0)
-        # Flat field science image array
-        sciarr[mask] /= fltarr[mask]
+        valid = non_nan * (gpmarr != 0)
+        # Renormalize flat by number of good pixels per wavelength bin
+        fltarr = renormalize_good_pixels(fltarr, gpmarr, gpmarr[non_nan].mean(), valid)
+
+        cols = np.arange(fltarr.shape[0])
+        fit_valid = fltarr > 0
+        try:
+            # fit a smooth model to the lamp/throughput shape of the raw master flat
+            cf = Fit1D(cols[fit_valid], fltarr[fit_valid], **smooth_params)
+            smooth_fit = np.clip(cf(cols), 0.0, None)
+        except SALTError:
+            smooth_fit = fltarr.copy()
+        response = np.ones_like(fltarr)
+        nz = smooth_fit > 0
+        # then divide it out
+        response[nz] = fltarr[nz] / smooth_fit[nz]
+
+        # Set combined non NaN science and non zero response mask
+        mask = (non_nan) * (response != 0)
+        # leftover pixel-to-pixel response used to flat-field extracted spectra
+        sciarr[mask] /= response[mask]
 
     # Renormalize by number of good pixels per wavelength bin
-    # Set combined non NaN science and non zero good pixel mask
-    mask = (non_nan) * (gpmarr != 0)
-    # Scale fibre flux for 'nr' of good pixels:
-    # - divide 'sci' by 'gpm'
-    sciarr[mask] /= gpmarr[mask]
-    # - multiply 'sci' by 'gpm' mean
-    sciarr[non_nan] *= gpmarr[non_nan].mean()
+    valid = non_nan * (gpmarr != 0)
+    sciarr = renormalize_good_pixels(sciarr, gpmarr, gpmarr[non_nan].mean(), valid)
 
     return sciarr
 
@@ -373,7 +412,7 @@ def get_plot_dir(work, category):
     return plot_dir
 
 # ---------------------------------------------------------------------------- #
-def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_rate, work):
+def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_rate, smooth_params, work):
 # ---------------------------------------------------------------------------- #
     '''
     Top: extracted spectrum using both optimal and boxcar methods. 
@@ -398,8 +437,8 @@ def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, ape
     W_box = normalize(aperture_weight * gpm)      # boxcar effective weight (top-hat over good rows)
 
     # extracted data from optimal and boxcar for fiber spectrum
-    F_opt = extract_fibre_optimal(sci_opt.copy(), gpm.copy(), flt.copy(), gain, read_noise, aperture_weight, dark_rate)
-    F_box = extract_fibre_boxcar(sciarr.copy(), gpmarr, fltarr.copy())
+    F_opt = extract_fibre_optimal(sci_opt.copy(), gpm.copy(), flt.copy(), gain, read_noise, aperture_weight, dark_rate, smooth_params)
+    F_box = extract_fibre_boxcar(sciarr.copy(), gpmarr, fltarr.copy(), smooth_params)
     gpm_per_col = gpm.sum(axis=0)
 
     fig = plt.figure(figsize=(4.6 * len(cols_to_debug), 10))
@@ -507,6 +546,51 @@ def plot_fibre_extraction(work, id, fibre_type, spectrum, gpm_per_col):
     plt.close(fig)
 
 # ---------------------------------------------------------------------------- #
+def plot_flat_throughput_smoothing(work, id, fibre_type, flt_2D, gpm_2D, aperture_weight, smooth_params):
+# ---------------------------------------------------------------------------- #
+    '''
+    Top: raw illumination-flat column profile and its smooth lamp/throughput fit.
+    Bottom: response ratio (raw / smooth fit) -- this is what actually flat-fields the science data.
+    '''
+    # per-column flat sum, renormalised for bad pixels, then fit
+    flt_col_sums = (flt_2D * aperture_weight).sum(axis=0)
+    n_good = (aperture_weight * gpm_2D).sum(axis=0)
+    n_expected = aperture_weight.sum(axis=0)
+    flt_col_sums = renormalize_good_pixels(flt_col_sums, n_good, n_expected, n_good > 0)
+
+    cols = np.arange(flt_col_sums.shape[0])
+    valid = flt_col_sums > 0
+    try:
+        cf = Fit1D(cols[valid], flt_col_sums[valid], **smooth_params)
+        smooth_fit = np.clip(cf(cols), 0.0, None)
+    except SALTError:
+        smooth_fit = flt_col_sums.copy()
+    response = np.ones_like(flt_col_sums)
+    nz = smooth_fit > 0
+    response[nz] = flt_col_sums[nz] / smooth_fit[nz]
+
+    polyorder = smooth_params['order']
+    fig, (axF, axR) = plt.subplots(2, 1, figsize=(8, 5), sharex=True, gridspec_kw={'height_ratios': [2, 1], 'hspace': 0.0})
+
+    bundle = 'sky-bundle' if fibre_type == 'sky' else 'object-bundle'
+    axF.set_title(f'fibre #{id} ({bundle}): response for flat-fielding', fontsize=15, pad=13)
+    axF.step(cols, flt_col_sums, where='mid', lw=0.5, color='grey', alpha=0.6, label='master flat')
+    axF.step(cols, smooth_fit, where='mid', lw=1.0, color='black', label=f'order-{polyorder} fit')
+    axF.set_ylabel('summed columns [counts / s]', fontsize=12, labelpad=12)
+    axF.legend(fontsize=12, loc='upper right')
+    plt.setp(axF.get_xticklabels(), visible=False)
+
+    axR.step(cols, response, where='mid', lw=0.5, color='black')
+    axR.axhline(1.0, linestyle='dashed', lw=0.8, color='grey')
+    axR.set_ylabel('response', fontsize=10, labelpad=12)
+    axR.set_xlabel('wavelength column', fontsize=12, labelpad=10)
+
+    plot_dir = get_plot_dir(work, 'extracted_spectra')
+    out_file = os.path.join(plot_dir, '{0}_flat_response_fibre{1}.png'.format(work['file'], id))
+    plt.savefig(out_file, dpi=180, format='png', bbox_inches='tight')
+    plt.close(fig)
+
+# ---------------------------------------------------------------------------- #
 def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_noise, work, log):
 # ---------------------------------------------------------------------------- #
     '''
@@ -534,6 +618,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
     method = work.get('extract_method', 'optimal')
     flat_type = work['flat']['type'][work['exp_type']]
     apply_flat_boxcar = flat_type in ['flat', 'fit']
+    smooth_params = work['smooth']['flat_throughput']
 
     # optimal extraction requires a flat field for the spatial profile
     if method == 'optimal' and flt is None:
@@ -594,7 +679,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
             sciarr = set_fibre_array(sci, r_min, r_max, valid, work)
             fltarr = set_fibre_array(flt, r_min, r_max, valid, work)
 
-            plot_extraction_comparison(method, id, cols_to_debug, sci_2D, gpm_2D, flt_2D, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_2D, work)
+            plot_extraction_comparison(method, id, cols_to_debug, sci_2D, gpm_2D, flt_2D, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_2D, smooth_params, work)
         #######################################################################
 
         # =========================== BOXCAR ===========================
@@ -608,7 +693,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
                 fltarr = set_fibre_array(flt, r_min, r_max, valid, work)
 
             # Add fibre flux to extracted fibres dictionary
-            fibres[id] = extract_fibre_boxcar(sciarr, gpmarr, fltarr)
+            fibres[id] = extract_fibre_boxcar(sciarr, gpmarr, fltarr, smooth_params)
 
         # =========================== OPTIMAL ==========================
         elif method == 'optimal':
@@ -625,7 +710,12 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
             dark_2D = dark_rate[r_min:r_max, :].copy()
 
             # Add fibre flux to extracted fibres dictionary
-            fibres[id] = extract_fibre_optimal(sci_2D, gpm_2D, flt_2D, gain, read_noise, aperture_weight, dark_2D)
+            fibres[id] = extract_fibre_optimal(sci_2D, gpm_2D, flt_2D, gain, read_noise, aperture_weight, dark_2D, smooth_params)
+
+            ######################## FLAT THROUGHPUT SMOOTHING PLOT  ###############
+            if plot_all_fibre_extractions:
+                plot_flat_throughput_smoothing(work, id, fibre.get('type', 'object'), flt_2D, gpm_2D, aperture_weight, smooth_params)
+            #########################################################################
 
         # Store good-pixel count for this fibre
         good_pixels[id] = gpmarr

@@ -3,7 +3,7 @@
     "check_combined_solution": 0,
 
     "NOTES": [
-        "a. Re smoothing parameters: window_length must be > polyorder + 1 for smooting to be applied.",
+        "a. Re smooth[arc]: window_length must be > polyorder + 1 for smooting to be applied.",
         "b. The trace[fit] entry in nirwals/science_reduce.json must be the same as the trace[fit] entry in nirwals/science_prepare.json!"
     ],
 
@@ -155,7 +155,8 @@
     "ar_ang_adjust": {"ar_ang": [59.0, 67.0, 74.0, 82.0, 90.0, 100.00], "adjust": [0.000000, 0.000150, 0.000250, 0.000350, 0.000475, 0.000625]},
 
     "smooth": {
-        "arc": {"window_length": 5, "polyorder": 3}
+        "arc": {"window_length": 5, "polyorder": 3},
+        "flat_throughput": {"function": "legendre", "order": 6, "low_reject": 3, "high_reject": 2, "niter": 5}
     },
     "specres":{
         "height_sigma": 5,
@@ -290,12 +291,14 @@
             "a. extract_method: 'optimal' | 'boxcar';",
             "b. optimal: Horne 1986 inverse-variance weighted extraction using fiber profiles from flat exposure;",
             "c. boxcar: sum within aperture with good-pixel renormalization;",
-            "d. read_noise_electrons: per-pixel read noise from up-the-ramp sampling, keyed by nearest EXPTIME"
+            "d. read_noise_electrons: per-pixel read noise from up-the-ramp sampling, keyed by nearest EXPTIME",
+            "e. gain_default: gain measured during image reduction"
         ],
         "read_noise_electrons": {
             "30": 15.5, "60": 12.8, "90": 11.6, "120": 11.2, "167": 10.7, "600": 12.6
         },
-        "read_noise_default": 12.6
+        "read_noise_default": 12.6,
+        "gain_default": 2.0
     },
 
     "w_mod": {"min": 0.0, "max": 0.0, "tol": 15.0}, "w_rms_tol": {"min": 0.0001, "max": 0.75}, "z_rms_tol": {"min": 0.0001, "max": 0.75},

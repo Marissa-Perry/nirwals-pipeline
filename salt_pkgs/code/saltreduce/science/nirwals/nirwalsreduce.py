@@ -46,7 +46,7 @@ from ...functions import Fit1D
 from ...functions import air_to_vac
 from ...functions import get_evenly_spaced_array
 # - primary
-from ...primary import set_dark_file
+from ...primary.primary_reductions import set_dark_file
 # - spectroscopy.ifu
 from ...spectroscopy.ifu import extract_fibres
 from ...spectroscopy.ifu import get_plot_dir
@@ -653,8 +653,8 @@ def extract_fibres_from_image(hdu, traces, work, log):
         # ensure non-negative dark rate
         dark_rate = np.clip(dark_rate, 0.0, None)
 
-    # set gain and read noise from headers
-    gain = hdu[PRIMARY].header['GAIN']
+    # set gain and read noise -- GAIN in the header is unreliable (see work['extract'] notes)
+    gain = work['extract']['gain_default']
     read_noise = set_read_noise(hdu, work)
 
     # fiber extraction
@@ -2518,7 +2518,8 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=Non
     if new_image is None: return hdu
 
     orig = hdu[PRIMARY].header
-    exptime = orig.get('EXPTIME'); gain = orig.get('GAIN')
+    exptime = orig.get('EXPTIME')
+    gain = work['extract']['gain_default']
 
     hdu_new = []
 
