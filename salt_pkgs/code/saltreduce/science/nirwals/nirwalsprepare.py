@@ -17,7 +17,7 @@ from datetime import datetime
 import numpy as np
 # astropy import
 from astropy.io import fits
-from scipy.ndimage import median_filter
+from scipy.ndimage import median_filter, binary_dilation
 from astropy.stats import mad_std
 # matplotlib imports
 import matplotlib.pyplot as plt
@@ -237,6 +237,11 @@ def generate_bpm(obs_date, log, **kwargs):
 
         # ---------- component 2: master darks ------------
         bpm_dark = np.zeros(bpm.shape, dtype=bool)
+        # raw data + background stats from the longest-exptime dark (component 4 input)
+        longest_dark_data = None
+        longest_dark_med = None
+        longest_dark_sig = None
+        longest_exptime = -1
         plot_dark = None   # arrays kept for the longest-exposure diagnostic only
 
         for dark_file in dark_files:
@@ -257,11 +262,33 @@ def generate_bpm(obs_date, log, **kwargs):
             bad_dark_perc = 100 * flagged.sum() / finite.sum()
             log.message('   - dark BPM: exptime={0}s, {1:.1f}% flagged'.format(exptime, bad_dark_perc), with_header=False)
 
+            # track the longest exposure's own data/stats separately from the union
+            if exptime > longest_exptime:
+                longest_exptime = exptime
+                longest_dark_data = d
+                longest_dark_med = med
+                longest_dark_sig = sig
+
             # retain only the longest exposure (the most stressing case) for plotting
             if plot_dark is None or exptime > plot_dark['exptime']:
                 plot_dark = dict(exptime=round(exptime), data=d[finite], med=med, upper=upper, lower=lower, perc=bad_dark_perc)
 
         bpm[bpm_dark] = 1.
+
+        # ---------- component 4: inter-pixel crosstalk (neighbors of hot pixels) ----------
+        apply_crosstalk = config['bpm'].get('crosstalk', {}).get('apply', True)
+        if apply_crosstalk:
+            crosstalk_sigma = config['bpm']['crosstalk']['sigma']
+            # independent, stricter threshold -- not the same as the base 5sigma bpm_dark threshold
+            crosstalk_threshold = longest_dark_med + crosstalk_sigma * longest_dark_sig
+            bpm_crosstalk_trigger = np.isfinite(longest_dark_data) & (longest_dark_data > crosstalk_threshold)
+            # cross-shaped (4-connected) dilation: each hot pixel also flags its 4 neighbors
+            cross_structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+            bpm_crosstalk = binary_dilation(bpm_crosstalk_trigger, structure=cross_structure)
+            crosstalk_perc = 100 * (bpm_crosstalk & ~bpm_crosstalk_trigger).sum() / bpm_crosstalk.size
+            bpm[bpm_crosstalk] = 1.
+            log.message('   - crosstalk BPM: {0:.2f}% additionally flagged ({1:.0f}sigma threshold, {2:.0f}s dark)'.format(
+                crosstalk_perc, crosstalk_sigma, longest_exptime), with_header=False)
 
         # ---------- diagnostic: longest-exposure master dark only ----------
         if plot_dark is not None:
@@ -333,7 +360,8 @@ def generate_bpm(obs_date, log, **kwargs):
         # ---------- bad-pixel percentage + header comment ----------
         bad = len(bpm[bpm == 1])
         perc_bad = (bad / bpm.size) * 100
-        comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels.')
+        crosstalk_comment = f'applied at {crosstalk_sigma} sigma' if apply_crosstalk else 'not applied'
+        comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels. Crosstalk masking (4-neighbor dilation of longest-exptime hot pixels): {crosstalk_comment}.')
 
     # diagnostic plot for bpm image
     plt.figure(figsize=(10,5))

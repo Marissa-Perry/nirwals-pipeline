@@ -28,13 +28,17 @@
     "bpm": {
         "generate": true,
         "notes": [
-            "a. If true, will generate BPM from master flat, master darks, and pixels flagged during up-the-ramp sampling."
-
+            "a. If true, will generate BPM from master flat, master darks, and pixels flagged during up-the-ramp sampling.",
+            "b. crosstalk.apply/sigma: flag the 4 neighbors of hot pixels above this many sigma (inter-pixel crosstalk)"
         ],
         "threshold": {
             "sigma": 5.0,
             "flat_smooth_k": 15,
             "flat_illum_frac": 0.2
+        },
+        "crosstalk": {
+            "sigma": 25.0,
+            "apply": true
         }
     },
 
