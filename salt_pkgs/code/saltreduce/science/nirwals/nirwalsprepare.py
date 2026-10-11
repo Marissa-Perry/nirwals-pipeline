@@ -729,7 +729,7 @@ def prepare_fibres_config_entries(config_p, flat_files, log):
         for fibre in fibres.values():
 
             # Get median of fibre ranges
-            med_range = list(np.median(np.array(fibre['ranges']), axis=0))
+            med_range = list(np.nanmedian(np.array(fibre['ranges']), axis=0))
 
             # Loop for fibre ranges...
             for i, r in enumerate(fibre['ranges']):
@@ -833,6 +833,13 @@ def dump_fibres_config(config_p, config_f, log):
 
     # Check work fibre traces config
     if config_f['wrk']['traces']:
+        # Merge onto whatever is already on disk, so a config that failed this run doesn't lose a previously-cached trace
+        existing_wrk = load_json_file(config_p['fibre_traces_wrk'])
+        if existing_wrk and existing_wrk.get('traces'):
+            merged_traces = dict(existing_wrk['traces'])
+            merged_traces.update(config_f['wrk']['traces'])
+            config_f['wrk']['traces'] = merged_traces
+
         # Add message to log
         msg = ' Dump work fibre traces config'
         log.message(msg, with_header=False)
