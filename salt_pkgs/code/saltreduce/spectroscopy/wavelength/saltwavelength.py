@@ -123,6 +123,9 @@ def calculate_wavelength_fit(parr, farr, line_list, wf, log=None, **kw):
         wf = fit_zero_point(
             parr, farr, sw, sf, wf, **kw['fit_zero_point'])
 
+        # Track the last non-degenerate fit, so that we can fall back to it
+        last_good_nwf = None
+
         while 1:
 
             # Match observed spectrum with line list:
@@ -139,6 +142,17 @@ def calculate_wavelength_fit(parr, farr, line_list, wf, log=None, **kw):
                 p, w = p[zmask], w[zmask]
                 # Set the wavelength fit
                 nwf = WavelengthFit(p, w, function=wf.function, order=wf.order)
+
+                # Check if this refit is degenerate (non-finite coefficients)
+                # fall back to the last good fit
+                try:
+                    is_finite = np.all(np.isfinite(np.asarray(nwf.coef, dtype=float)))
+                except (TypeError, ValueError):
+                    is_finite = True
+                if not is_finite:
+                    nwf = last_good_nwf
+                    break
+                last_good_nwf = nwf
 ####>
                 # break
 ####<
