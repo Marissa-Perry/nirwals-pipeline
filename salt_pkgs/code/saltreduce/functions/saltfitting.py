@@ -17,6 +17,7 @@ from astropy.modeling.models import Polynomial1D
 from astropy.modeling.models import Chebyshev1D
 from astropy.modeling.models import Legendre1D
 from astropy.modeling.fitting import LinearLSQFitter
+from astropy.stats import mad_std
 
 # ---------------------------------------------------------------------------- #
 
@@ -135,9 +136,9 @@ class Fit1D:
         return
 
     def sigma(self, x, y):
-        """Return the RMS of the fit """
+        """Return a robust estimate of residual scatter, insensitive to extreme outliers"""
 
-        return (((y - self(x))**2).mean())**0.5
+        return mad_std(y - self(x))
 
     def chisq(self, x, y, err):
         """Return the chi^2 of the fit"""
