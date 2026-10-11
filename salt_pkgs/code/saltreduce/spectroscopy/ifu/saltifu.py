@@ -343,7 +343,10 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     flt_col_sums = renormalize_good_pixels(flt_col_sums, n_good, n_expected, n_good > 0)
 
     cols = np.arange(flt_col_sums.shape[0])
-    valid = flt_col_sums > 0
+    finite_positive = flt_col_sums[flt_col_sums > 0]
+    # exclude non-physical renormalized values 
+    valid_vals = 20 * np.median(finite_positive) if finite_positive.size else np.inf
+    valid = (flt_col_sums > 0) & (flt_col_sums < valid_vals)
     try:
         # fit a smooth model to the lamp/throughput shape of the raw master flat
         cf = Fit1D(cols[valid], flt_col_sums[valid], **smooth_params)
@@ -351,7 +354,7 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     except SALTError:
         smooth_fit = flt_col_sums.copy()
     response = np.ones_like(flt_col_sums)
-    nz = smooth_fit > 0
+    nz = (smooth_fit > 0) & valid
     # then divide it out
     response[nz] = flt_col_sums[nz] / smooth_fit[nz]
     good = response != 0
@@ -378,7 +381,10 @@ def extract_fibre_boxcar(sciarr, gpmarr, fltarr, smooth_params):
         fltarr = renormalize_good_pixels(fltarr, gpmarr, gpmarr[non_nan].mean(), valid)
 
         cols = np.arange(fltarr.shape[0])
-        fit_valid = fltarr > 0
+        finite_positive = fltarr[fltarr > 0]
+        # exclude non-physical renormalized values 
+        valid_vals = 20 * np.median(finite_positive) if finite_positive.size else np.inf
+        fit_valid = (fltarr > 0) & (fltarr < valid_vals)
         try:
             # fit a smooth model to the lamp/throughput shape of the raw master flat
             cf = Fit1D(cols[fit_valid], fltarr[fit_valid], **smooth_params)
@@ -386,7 +392,7 @@ def extract_fibre_boxcar(sciarr, gpmarr, fltarr, smooth_params):
         except SALTError:
             smooth_fit = fltarr.copy()
         response = np.ones_like(fltarr)
-        nz = smooth_fit > 0
+        nz = (smooth_fit > 0) & fit_valid
         # then divide it out
         response[nz] = fltarr[nz] / smooth_fit[nz]
 
@@ -559,14 +565,17 @@ def plot_flat_throughput_smoothing(work, id, fibre_type, flt_2D, gpm_2D, apertur
     flt_col_sums = renormalize_good_pixels(flt_col_sums, n_good, n_expected, n_good > 0)
 
     cols = np.arange(flt_col_sums.shape[0])
-    valid = flt_col_sums > 0
+    finite_positive = flt_col_sums[flt_col_sums > 0]
+    # exclude non-physical renormalized values 
+    valid_vals = 20 * np.median(finite_positive) if finite_positive.size else np.inf
+    valid = (flt_col_sums > 0) & (flt_col_sums < valid_vals)
     try:
         cf = Fit1D(cols[valid], flt_col_sums[valid], **smooth_params)
         smooth_fit = np.clip(cf(cols), 0.0, None)
     except SALTError:
         smooth_fit = flt_col_sums.copy()
     response = np.ones_like(flt_col_sums)
-    nz = smooth_fit > 0
+    nz = (smooth_fit > 0) & valid
     response[nz] = flt_col_sums[nz] / smooth_fit[nz]
 
     polyorder = smooth_params['order']
@@ -639,7 +648,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
 
     ###### DEBUGGING ########
     fiber_to_debug = '050'
-    plot_all_fibre_extractions = True
+    plot_all_fibre_extractions = bool(work['debug'])
     #########################
 
     # Initialise extracted fibres and good pixels dictionaries
