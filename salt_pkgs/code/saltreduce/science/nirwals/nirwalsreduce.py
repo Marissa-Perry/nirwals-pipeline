@@ -973,9 +973,10 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     if work['exp_type'] == 'science':
         # Subtract sky
         sci_image, sci_image_with_cont, sky_scaled, sky_cf_image = subtract_sky(hdu, cf_image, cs_image, sf_image, sky_bundle_mask, work, log)
-        # saving skylines and sky continuum for product header
         skycorr_ss = sky_scaled
-        skycorr_ssc = (sky_scaled + sky_cf_image) if (sky_scaled is not None and sky_cf_image is not None) else None
+        skycorr_ssc = skycorr_ss
+        if sky_scaled is not None and sky_cf_image is not None:
+            skycorr_ssc = sky_scaled + sky_cf_image
         # Write new fits file: sky subtracted without continuum
         write_new_fits(hdu, sci_image, gpcnt_image, '', 'ss', work, log, skycorr=skycorr_ss)
         # Write new fits file: sky subtracted with continuum
@@ -2029,9 +2030,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
         msg = '   - sky continuum: scaled by sky-bundle ratio (median={0:.4g}, {1} cols left unscaled)'.format(
             np.median(scale[trustworthy]) if np.any(trustworthy) else float('nan'), int((~trustworthy).sum()))
-    else:
+    elif cfg['enable']:
         msg = '   - sky continuum: too few valid sky-bundle fibers or fit failed; not scaled'
+    else:
+        msg = '   - sky continuum: scaling disabled (enable=0); using unscaled sky continuum'
     log.message(msg, with_header=False)
+
+    # restores the object's own continuum, subtracting sky's continuum contribution
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image_scaled)
 
     # Diagnostic plots of the sky-line and sky-continuum correction terms and their effect on the subtraction
@@ -2044,8 +2049,12 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
     # Add sky subtracted header key, noting whether continuum scaling was included
     value = time.asctime(time.localtime())
-    comment = ('Image has been sky (line + continuum) subtracted' if scaled_ok
-               else 'Image has been sky (line) subtracted; sky continuum scaling failed')
+    if scaled_ok:
+        comment = 'Image has been sky (line + continuum) subtracted, continuum scaled by sky-bundle ratio'
+    elif cfg['enable']:
+        comment = 'Image has been sky (line + continuum) subtracted; continuum scaling failed, used unscaled sky continuum'
+    else:
+        comment = 'Image has been sky (line + continuum) subtracted; continuum scaling disabled, used unscaled sky continuum'
     hdu['Primary'].header['SKYSUB'] = (value, comment)
 
     return sci_image, sci_image_with_cont, sky_scaled, sky_cf_image_scaled
