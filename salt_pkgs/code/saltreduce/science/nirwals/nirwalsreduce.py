@@ -301,7 +301,7 @@ def reduce_sky(config_r, fits_files, log):
 def reduce_object(config_r, fits_files, log):
 # ---------------------------------------------------------------------------- #
 
-    # Reduce object product fits files
+    # Reduce science product fits files
     reduce_files(config_r, fits_files, log)
 
     return
@@ -1812,14 +1812,14 @@ def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter)
 # ---------------------------------------------------------------------------- #
     '''
     Fit the multiplicative scale that matches the sky-frame sky lines to the
-    object-frame sky lines before subtraction, by minimizing the sky-subtracted
+    science-frame sky lines before subtraction, by minimizing the sky-subtracted
     residual (sci - scale * sky) over the sky-line pixels.
 
     For each output element the scale is the least-squares projection
         scale = sum(sky * sci) / sum(sky * sky)
     evaluated over the sky-line pixels only, with iterative sigma-clipping so bright line cores do not drag the fit.
 
-    sci_image : 2D continuum-subtracted object image (fibre x wavelength)
+    sci_image : 2D continuum-subtracted science image (fibre x wavelength)
     sky_image : 2D continuum-subtracted sky image (fibre x wavelength)
     line_mask : 2D boolean mask, True on the sky-line pixels to fit over
     axis      : axis to collapse when fitting -- axis=0 returns a per-wavelength (column) scale fit across fibres; axis=1 returns a per-fibre (row) scale fit across wavelengths
@@ -1968,7 +1968,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     n_sigma = work['sky_scaling']['n_sigma']
     n_iter = work['sky_scaling']['n_iter']
 
-    # Scale the sky-frame sky lines onto the object-frame sky lines before subtracting
+    # Scale the sky-frame sky lines onto the science-frame sky lines before subtracting
     # wavelength-dependent scale (per column), fit across fibres
     scale_wave = sky_scale_projection(sci_cs_image, sky_cs_image, line_mask, axis=0, n_sigma=n_sigma, n_iter=n_iter)
     # residual fibre-dependent scale (per row), fit across wavelengths on the wavelength-scaled sky
@@ -1980,18 +1980,18 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     scaling_image_masked = scaling_image * interline_image_mask
     scaling_image_masked[scaling_image_masked < 1e-2] = 1.
 
-    # Scale the sky continuum-subtracted image and subtract it from the object
+    # Scale the sky continuum-subtracted image and subtract it from the science image
     sky_scaled = sky_cs_image * scaling_image_masked
     sci_image = sci_cs_image - sky_scaled
 
-    # Scale sky-continuum in the sky frame up to the object frame using sky-bundle fibres
+    # Scale sky-continuum in the sky frame up to the science frame using sky-bundle fibres
     cfg = work['sky_scaling']['continuum']
     sky_cf_image_scaled = sky_cf_image
-    scaled_ok = cfg['enable'] and sky_bundle_mask.sum() >= cfg['min_sky_fibers']
+    scale_sky_cont = cfg['enable'] and sky_bundle_mask.sum() >= cfg['min_sky_fibers']
 
-    obj_fit_curve = sky_fit_curve = med_obj_raw = med_sky_raw = None
+    obj_fit_cont = sky_fit_cont = med_obj_raw = med_sky_raw = None
 
-    if scaled_ok:
+    if scale_sky_cont:
         # sky-bundle frames
         raw_obj_bundle = (sci_cs_image + sci_cf_image)[sky_bundle_mask]   # (n_sky, cols)
         raw_sky_bundle = (sky_cs_image + sky_cf_image)[sky_bundle_mask]   # (n_sky, cols)
@@ -2008,48 +2008,59 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         # Continuum fit of the median sky-bundle spectrum, per exposure -- skylines excluded
         fit_mask_1d = has_cols & continuum_safe_col
         xarr = work['we']
-        obj_cf = fit_continuum('sky_bundle', 'median', 'object', xarr, med_obj_raw, fit_mask_1d, work, log)
+        obj_cf = fit_continuum('sky_bundle', 'median', 'science', xarr, med_obj_raw, fit_mask_1d, work, log)
         sky_cf = fit_continuum('sky_bundle', 'median', 'sky', xarr, med_sky_raw, fit_mask_1d, work, log)
-        scaled_ok = (obj_cf is not None) and (sky_cf is not None)
+        scale_sky_cont = (obj_cf is not None) and (sky_cf is not None)
 
     # Mean sky-frame continuum for the object-bundle rows
     obj_bundle_mask = ~sky_bundle_mask
     sky_cf_obj_mean = sky_cf_image[obj_bundle_mask].mean(axis=0)
 
-    if scaled_ok:
-        obj_fit_curve = obj_cf(xarr)
-        sky_fit_curve = sky_cf(xarr)
+    if scale_sky_cont:
+        obj_fit_cont = obj_cf(xarr)
+        sky_fit_cont = sky_cf(xarr)
 
-        # ratio of the sky-bundle object/sky continuum fits
+        # ratio of the sky-bundle science/sky continuum fits
         # wavelengths with negatvie continuum are left unscaled
-        trustworthy = (obj_fit_curve >= 0) & (sky_fit_curve >= 0) & (np.abs(sky_fit_curve) > 1e-8)
+        good = (obj_fit_cont >= 0) & (sky_fit_cont >= 0) & (np.abs(sky_fit_cont) > 1e-8)
         scale = np.ones(sci_cf_image.shape[1], dtype=np.float32)
-        scale[trustworthy] = obj_fit_curve[trustworthy] / sky_fit_curve[trustworthy]
+        scale[good] = obj_fit_cont[good] / sky_fit_cont[good]
 
         sky_cf_image_scaled = sky_cf_image * scale[None, :]
 
         msg = '   - sky continuum: scaled by sky-bundle ratio (median={0:.4g}, {1} cols left unscaled)'.format(
-            np.median(scale[trustworthy]) if np.any(trustworthy) else float('nan'), int((~trustworthy).sum()))
+            np.median(scale[good]) if np.any(good) else float('nan'), int((~good).sum()))
     elif cfg['enable']:
         msg = '   - sky continuum: too few valid sky-bundle fibers or fit failed; not scaled'
     else:
         msg = '   - sky continuum: scaling disabled (enable=0); using unscaled sky continuum'
     log.message(msg, with_header=False)
 
-    # restores the object's own continuum, subtracting sky's continuum contribution
+    # restores the science frame's own continuum, subtracting sky's continuum contribution
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image_scaled)
 
     # Diagnostic plots of the sky-line and sky-continuum correction terms and their effect on the subtraction
     skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled)
     skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask)
-    if scaled_ok:
+    if scale_sky_cont:
         sky_cf_obj_mean_scaled = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
         sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw, med_sky_raw,
-                                    obj_fit_curve, sky_fit_curve, scale, sky_cf_obj_mean, sky_cf_obj_mean_scaled)
+                                    obj_fit_cont, sky_fit_cont, scale, sky_cf_obj_mean, sky_cf_obj_mean_scaled)
+    else:
+        sci_frame_fibers = (sci_cs_image + sci_cf_image)[obj_bundle_mask]
+        sky_frame_fibers = (sky_cs_image + sky_cf_image)[obj_bundle_mask]
+        valid = (sci_frame_fibers != 0) & (sky_frame_fibers != 0) & np.isfinite(sci_frame_fibers) & np.isfinite(sky_frame_fibers)
+        has_cols = valid.any(axis=0)
+        med_sci = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
+        med_sky = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
+        med_sci[has_cols] = np.nanmedian(np.where(valid[:, has_cols], sci_frame_fibers[:, has_cols], np.nan), axis=0)
+        med_sky[has_cols] = np.nanmedian(np.where(valid[:, has_cols], sky_frame_fibers[:, has_cols], np.nan), axis=0)
+        sci_cf_obj_mean = sci_cf_image[obj_bundle_mask].mean(axis=0)
+        sky_continuum_unscaled_plot(work, sci_frame_fibers, sky_frame_fibers, med_sci, med_sky, sci_cf_obj_mean, sky_cf_obj_mean)
 
     # Add sky subtracted header key, noting whether continuum scaling was included
     value = time.asctime(time.localtime())
-    if scaled_ok:
+    if scale_sky_cont:
         comment = 'Image has been sky (line + continuum) subtracted, continuum scaled by sky-bundle ratio'
     elif cfg['enable']:
         comment = 'Image has been sky (line + continuum) subtracted; continuum scaling failed, used unscaled sky continuum'
@@ -2065,17 +2076,17 @@ def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw
                                 obj_fit_curve, sky_fit_curve, scale, sky_cf_obj_mean, sky_cf_obj_mean_scaled):
 # ---------------------------------------------------------------------------- #
     '''
-    sky-bundle fibres and their continuum fits (object vs sky exposure), the derived scale factor,
+    sky-bundle fibres and their continuum fits (science vs sky exposure), the derived scale factor,
     and its effect on the object-bundle's sky-frame continuum before it is subtracted.
     '''
     fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(8, 11), sharex=True, gridspec_kw={'hspace': 0.3})
 
     wave = work['we']
     for i, row in enumerate(raw_obj_bundle):
-        ax1.step(wave, row, where='mid', color='orange', lw=0.4, alpha=0.25, label='object fibre' if i == 0 else None)
+        ax1.step(wave, row, where='mid', color='orange', lw=0.4, alpha=0.25, label='science fibre' if i == 0 else None)
     for i, row in enumerate(raw_sky_bundle):
         ax1.step(wave, row, where='mid', color='tab:blue', lw=0.4, alpha=0.25, label='sky fibre' if i == 0 else None)
-    ax1.step(wave, med_obj_raw, where='mid', color='darkorange', lw=1.3, label='object median')
+    ax1.step(wave, med_obj_raw, where='mid', color='darkorange', lw=1.3, label='science median')
     ax1.step(wave, med_sky_raw, where='mid', color='tab:blue', lw=1.3, label='sky median')
     ax1.set_ylabel('counts / s', fontsize=14, labelpad=15)
     ax1.set_ylim(-3, np.nanpercentile(max(med_obj_raw.max(), med_sky_raw.max()), 99.9))
@@ -2103,7 +2114,7 @@ def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw
     ax4.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
 
     plot_dir = get_plot_dir(work, 'sky_subtraction')
-    png_file = '{0}_sky_continuum_scaling.png'.format(work['file'])
+    png_file = '{0}_sky_continuum_subtraction.png'.format(work['file'])
     filepath = os.path.join(plot_dir, png_file)
     plt.savefig(filepath, dpi=180, format='png', bbox_inches='tight')
     plt.close()
@@ -2112,11 +2123,55 @@ def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw
 
 
 # ---------------------------------------------------------------------------- #
-def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum_arr):
+def sky_continuum_unscaled_plot(work, sci_frame_fibers, sky_frame_fibers, med_sci, med_sky, sci_cf_mean, sky_cf_mean):
 # ---------------------------------------------------------------------------- #
     '''
-    plotting the summed skylines vs. fiber # for both object and sky cs frames.
-    the obj-to-sky ratio of these summed skylines is used as a fiber-dependent scale factor in the sky-subtraction step.
+    object-bundle fiber spectra (science vs sky frame) and their mean continuum,
+    and the resulting continuum after subtracting them -- for when sky-bundle
+    ratio scaling is disabled or unavailable.
+    '''
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8, 8.25), sharex=True, gridspec_kw={'hspace': 0.3})
+
+    wave = work['we']
+    for i, row in enumerate(sci_frame_fibers):
+        ax1.step(wave, row, where='mid', color='orange', lw=0.4, alpha=0.15, label='science fibre' if i == 0 else None)
+    for i, row in enumerate(sky_frame_fibers):
+        ax1.step(wave, row, where='mid', color='tab:blue', lw=0.4, alpha=0.15, label='sky fibre' if i == 0 else None)
+    ax1.step(wave, med_sci, where='mid', color='darkorange', lw=1.3, label='science median')
+    ax1.step(wave, med_sky, where='mid', color='tab:blue', lw=1.3, label='sky median')
+    ax1.set_ylabel('counts / s', fontsize=14, labelpad=15)
+    ax1.set_ylim(-3, np.nanpercentile(max(med_sci.max(), med_sky.max()), 99.9))
+    ax1.legend(fontsize=10, loc='upper right')
+    ax1.set_title('object-bundle fiber spectra', fontsize=15, pad=13)
+
+    ax2.step(wave, sci_cf_mean, where='mid', color='darkorange', lw=1.3, label='science')
+    ax2.step(wave, sky_cf_mean, where='mid', color='tab:blue', lw=1.3, label='sky')
+    ax2.set_ylabel('counts / s', fontsize=14, labelpad=15)
+    ax2.legend(fontsize=10, loc='upper right')
+    ax2.set_title('object-bundle continuum fits', fontsize=15, pad=13)
+
+    subtracted = sci_cf_mean - sky_cf_mean
+    ax3.axhline(0.0, color='grey', lw=0.8, ls='--')
+    ax3.step(wave, subtracted, where='mid', color='black', lw=1.0)
+    ax3.set_ylabel('counts / s', fontsize=14, labelpad=15)
+    ax3.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
+    ax3.set_title('sky-continuum subtracted science continuum fit', fontsize=15, pad=13)
+
+    plot_dir = get_plot_dir(work, 'sky_subtraction')
+    png_file = '{0}_sky_continuum_subtraction.png'.format(work['file'])
+    filepath = os.path.join(plot_dir, png_file)
+    plt.savefig(filepath, dpi=180, format='png', bbox_inches='tight')
+    plt.close()
+
+    return
+
+
+# ---------------------------------------------------------------------------- #
+def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, science_spectral_sum_arr):
+# ---------------------------------------------------------------------------- #
+    '''
+    plotting the summed skylines vs. fiber # for both science and sky cs frames.
+    the science-to-sky ratio of these summed skylines is used as a fiber-dependent scale factor in the sky-subtraction step.
     '''
 
     n_fibres = sky_spectral_sum_arr.shape[0]
@@ -2124,7 +2179,7 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, object_spectral_sum
 
     plt.figure(figsize=(8,5))
     plt.plot(fibre_idx, sky_spectral_sum_arr, label='sky frame')
-    plt.plot(fibre_idx, object_spectral_sum_arr, label='obj frame')
+    plt.plot(fibre_idx, science_spectral_sum_arr, label='science frame')
 
     plt.xlabel('fiber #', fontsize=12, labelpad=15)
     plt.ylabel('summed skyline flux', fontsize=12, labelpad=15)
@@ -2159,7 +2214,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
          Fibre-dependent scale term scale_fiber (per fibre, fit across wavelengths on
          the wavelength-scaled sky), with the count of sky-line pixels per fibre.
  
-      3. {file}_sky_subtraction.png
+      3. {file}_skyline_subtraction.png
          The applied combined scale (scale_fiber x scale_wave) and its effect: sky before
          scaling, the applied scale factor, and the sky-subtracted science before
          vs after scaling -- so the reduction in sky-line residuals is directly
@@ -2267,18 +2322,18 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
  
     im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
     # axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    axs[2].set_title(r'(C)  object $-$ unscaled sky', fontsize=16, pad=5)
+    axs[2].set_title(r'(C)  science $-$ unscaled sky', fontsize=16, pad=5)
     colorbar_axis(axs[2], im2, label='counts / s')
  
     im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
     # axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
-    axs[3].set_title(r'(D)  object $-$ scaled sky', fontsize=16, pad=5)
+    axs[3].set_title(r'(D)  science $-$ scaled sky', fontsize=16, pad=5)
     axs[3].set_xlabel('spectral channel', fontsize=14, labelpad=12)
     colorbar_axis(axs[3], im3, label='counts / s')
 
     fig.supylabel('fiber #', fontsize=14, x=0.05, y=0.5)
  
-    fig.savefig(stub + '_sky_subtraction.png', dpi=180, format='png', bbox_inches='tight')
+    fig.savefig(stub + '_skyline_subtraction.png', dpi=180, format='png', bbox_inches='tight')
     plt.close(fig)
  
     return
@@ -2289,7 +2344,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
 def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask):
 # ---------------------------------------------------------------------------- #
     '''
-    plotting the residual intensity of all skylines for each fiber in the object frame after subtraction.
+    plotting the residual intensity of all skylines for each fiber in the science frame after subtraction.
     These skylines are identified with the sky-fit images and meet the set threshold value.
     '''
 
@@ -2322,7 +2377,7 @@ def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask):
     plt.legend(fontsize=12)
     # Set png file
     plot_dir = get_plot_dir(work, 'sky_subtraction')
-    png_file = '{0}_residual_sky_vs_fiber_threshold_0.5.png'.format(work['file'])
+    png_file = '{0}_skyline_region_residuals.png'.format(work['file'])
     # Add output directory path to png file
     filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
