@@ -2144,9 +2144,12 @@ def sky_continuum_unscaled_plot(work, sci_frame_fibers, sky_frame_fibers, med_sc
     ax1.legend(fontsize=10, loc='upper right')
     ax1.set_title('object-bundle fiber spectra', fontsize=15, pad=13)
 
+    ax2.step(wave, med_sci, where='mid', color='darkorange', lw=0.6, alpha=0.25)
+    ax2.step(wave, med_sky, where='mid', color='tab:blue', lw=0.6, alpha=0.25)
     ax2.step(wave, sci_cf_mean, where='mid', color='darkorange', lw=1.3, label='science')
     ax2.step(wave, sky_cf_mean, where='mid', color='tab:blue', lw=1.3, label='sky')
     ax2.set_ylabel('counts / s', fontsize=14, labelpad=15)
+    ax2.set_ylim(min(sci_cf_mean.min(), sky_cf_mean.min())-0.2, max(sci_cf_mean.max(), sky_cf_mean.max())+0.2)
     ax2.legend(fontsize=10, loc='upper right')
     ax2.set_title('object-bundle continuum fits', fontsize=15, pad=13)
 
