@@ -259,7 +259,7 @@
                 "b. wherever either sky-bundle continuum fit is negative, the ratio is left unscaled (factor 1) instead;",
                 "c. min_sky_fibers = skip scaling if too few sky-bundle fibres have valid continuum"
             ],
-            "enable": 1,
+            "enable": 0,
             "min_sky_fibers": 10
         }
     },
