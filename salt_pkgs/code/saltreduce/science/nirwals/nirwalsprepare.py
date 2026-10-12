@@ -364,8 +364,9 @@ def generate_bpm(obs_date, log, **kwargs):
         comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels. Crosstalk masking (4-neighbor dilation of longest-exptime hot pixels): {crosstalk_comment}.')
 
     # diagnostic plot for bpm image
+    crosstalk_status = 'enabled' if config['bpm'].get('crosstalk', {}).get('apply', True) else 'disabled'
     plt.figure(figsize=(10,5))
-    plt.title(fr'{perc_bad:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=12, pad=15)
+    plt.title(fr'{perc_bad:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$, pixel crosstalk mask {crosstalk_status}', fontsize=12, pad=15)
     plt.imshow(bpm, origin='lower', cmap='Greys_r', vmin=0, vmax=1) 
     # Set png file
     plot_dir = os.path.join(bpm_dir,'plots')
