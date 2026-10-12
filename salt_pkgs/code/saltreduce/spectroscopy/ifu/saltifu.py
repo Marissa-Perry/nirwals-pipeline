@@ -299,7 +299,7 @@ def trace_fibres(traces, fibres, windows, work, log):
 def renormalize_good_pixels(arr, good_count, expected_count, valid):
 # ---------------------------------------------------------------------------- #
     '''
-    Rescale for signal lost by masked pixels. 
+    Rescale for signal lost by masked pixels.
     Divide by good-pixel count, then rescale back up by the expected count.
     '''
     expected_count = np.broadcast_to(expected_count, arr.shape)
@@ -336,11 +336,7 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     F = F_e / gain                         # [e-] --> [counts] 
 
     # flat-field extracted spectra
-    flt_col_sums = flt_ap.sum(axis=0)    # sum across fibers
-    n_good = (aperture_weight * gpm).sum(axis=0)
-    n_expected = aperture_weight.sum(axis=0)
-    # Renormalize flat by number of good pixels per wavelength bin
-    flt_col_sums = renormalize_good_pixels(flt_col_sums, n_good, n_expected, n_good > 0)
+    flt_col_sums = flt_ap.sum(axis=0)    # same (uncorrected) sum as P's normalisation -- their bad-pixel biases cancel in F/response below
 
     cols = np.arange(flt_col_sums.shape[0])
     finite_positive = flt_col_sums[flt_col_sums > 0]
