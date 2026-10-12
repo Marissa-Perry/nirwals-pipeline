@@ -336,7 +336,7 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     F = F_e / gain                         # [e-] --> [counts] 
 
     # flat-field extracted spectra
-    flt_col_sums = flt_ap.sum(axis=0)    # same (uncorrected) sum as P's normalisation -- their bad-pixel biases cancel in F/response below
+    flt_col_sums = flt_ap.sum(axis=0)    # same sum as P's normalisation - bad-pixel biases cancel in F/response below
 
     cols = np.arange(flt_col_sums.shape[0])
     finite_positive = flt_col_sums[flt_col_sums > 0]
