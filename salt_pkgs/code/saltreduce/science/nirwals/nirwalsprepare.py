@@ -598,15 +598,16 @@ def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_ro
     # right panel: how alpha is distributed, sharing the same y-axis as the scatter -- median
     # labels live here instead of on the scatter, next to the distribution they describe
     bins = np.linspace(-0.005, 0.05, 100)
-    ax2.hist(combined_values, bins=bins, orientation='horizontal', color='#9a8c98', alpha=0.5)
-    ax2.hist(row_values, bins=bins, orientation='horizontal', color='#fec89a', alpha=0.5)
-    ax2.hist(col_values, bins=bins, orientation='horizontal', color='#B9CBC0', alpha=0.5)
+    combined_counts, _, _ = ax2.hist(combined_values, bins=bins, orientation='horizontal', color='#9a8c98', alpha=0.5)
+    row_counts, _, _ = ax2.hist(row_values, bins=bins, orientation='horizontal', color='#fec89a', alpha=0.5)
+    col_counts, _, _ = ax2.hist(col_values, bins=bins, orientation='horizontal', color='#B9CBC0', alpha=0.5)
     ax2.axhline(np.median(combined_values), color='#9a8c98', ls='--', lw=1.2)
     ax2.axhline(used_row, color='#FD8721', ls='--', lw=1.2)
     ax2.axhline(used_col, color='#577562', ls='--', lw=1.2)
-    ax2.text(700, used_row, fr'$\alpha_{{\rm row}}={used_row:.3f}$', color='#FD8721', fontsize=12)
-    ax2.text(700, used_col, fr' $\alpha_{{\rm col}}={used_col:.3f}$', color='#577562', fontsize=12)
-    ax2.text(700, np.median(combined_values), fr'$\alpha={np.median(combined_values):.3f}$', color='#9a8c98', fontsize=12)
+    text_x_pos = max(combined_counts.max(), row_counts.max(), col_counts.max()) * 1.10   # 10% buffer
+    ax2.text(text_x_pos, used_row, fr'$\alpha_{{\rm row}}={used_row:.3f}$', color='#FD8721', fontsize=12)
+    ax2.text(text_x_pos, used_col, fr' $\alpha_{{\rm col}}={used_col:.3f}$', color='#577562', fontsize=12)
+    ax2.text(text_x_pos, np.median(combined_values), fr'$\alpha={np.median(combined_values):.3f}$', color='#9a8c98', fontsize=12)
     ax2.set_xlabel('# of pixels', fontsize=16, labelpad=15)
     plt.setp(ax2.get_yticklabels(), visible=False)
     ax2.tick_params(labelsize=14)
