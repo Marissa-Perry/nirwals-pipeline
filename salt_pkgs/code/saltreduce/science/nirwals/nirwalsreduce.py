@@ -957,8 +957,8 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     # Row mask for the sky-bundle fibres, same row order as image/gpcnt_image
     sky_bundle_mask = np.array([traces[fid]['type'] == 'sky' for fid in fibres.keys()])
 
-    # Fit and subtract continuum
-    cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log)
+    # Fit and subtract continuum, using the sky exposure's own skyline mask for the science frame
+    cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log, mask_skylines=(work['exp_type'] == 'science'))
     # Write new fits file: continuum fit
     write_new_fits(hdu, cf_image, None, '', 'cf', work, log)
     # Write new fits file: continuum subtracted
@@ -1560,7 +1560,21 @@ def fit_and_subtract_continuum_for_fibre(key, id, work, log):
     return farr
 
 # ---------------------------------------------------------------------------- #
-def fit_and_subtract_continuum_for_image(hdu, key, image, work, log):
+def load_sky_product(hdu, work, tag):
+# ---------------------------------------------------------------------------- #
+    trg_name = hdu[PRIMARY].header['OBJECT']
+    # no dedicated sky exposure to load from
+    if 'sky' not in work['exposures'] or work['wrk_config'] not in work['exposures']['sky']:
+        return None
+    # match the sky exposure by target name, same as the object being reduced
+    for entry in work['exposures']['sky'][work['wrk_config']][tag]:
+        with fits.open(entry['file'], mode='readonly') as skyhdu:
+            if product_object(skyhdu) == trg_name:
+                return product_flux_data(skyhdu).copy()
+    return None
+
+# ---------------------------------------------------------------------------- #
+def fit_and_subtract_continuum_for_image(hdu, key, image, work, log, mask_skylines=False):
 # ---------------------------------------------------------------------------- #
 
     # Add message to log
@@ -1578,7 +1592,12 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log):
     # Set 'x' (wavelength) array
     xarr = work['we']
     # masking out strong skyline regions before continuum fitting
-    skyline_image_mask = set_skyline_mask(hdu, work, log, sf_image=None)
+    if mask_skylines:
+        # use the sky exposure's own skyline-location mask, instead of a locally-estimated threshold
+        sky_sf_image = load_sky_product(hdu, work, 'sf')
+        skyline_image_mask = set_skyline_mask(hdu, work, log, sf_image=sky_sf_image) if sky_sf_image is not None else None
+    else:
+        skyline_image_mask = set_skyline_mask(hdu, work, log, sf_image=None)
     # if no sky exposures found, no masking
     if skyline_image_mask is None:
         skyline_col = np.ones(cols, dtype=bool)
@@ -2391,33 +2410,10 @@ def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask):
 
 
 # ---------------------------------------------------------------------------- #
-def set_curve_mask(image, work):
-# ---------------------------------------------------------------------------- #
-
-    # Set nr of image rows and columns
-    rows, cols = image.shape
-    # Initialise mask array
-    mask = np.ones((rows, cols), dtype=bool)
-
-    # Loop for image rows...
-    for i in range(rows):
-
-        # Set row flux
-        farr = image[i, :].copy()
-        # Set mask to exclude 'empty' curved edges of image
-        mask = set_curve_mask_for_row(mask, i, farr, work)
-
-    # Set mask in work dictionary
-    work['image_mask'] = mask
-
-    return
-
-
-# ---------------------------------------------------------------------------- #
 def set_skyline_mask(hdu, work, log, sf_image=None):
 # ---------------------------------------------------------------------------- #
     '''
-    Generate a 2D mask for strong skyline regions. 
+    Generate a 2D mask for strong skyline regions.
 
     For continuum fitting, uses wavelength-calibrated sky exposure ('a') to compute the mask.
 
@@ -2425,49 +2421,10 @@ def set_skyline_mask(hdu, work, log, sf_image=None):
     '''
     # if no sky-fit image is provided, use the wavelength-calibrated sky exposure from hdu
     if sf_image is None:
-        # Set target name (OBJECT)
-        trg_name = hdu[PRIMARY].header['OBJECT']
-
-        # Check sky exposures
-        if 'sky' not in work['exposures'].keys():
-            # Add message to log
-            msg = '   - no sky images!'
-            log.message(msg, with_header=False)
-            # Get outa here!
+        sky_image = load_sky_product(hdu, work, 'a')
+        if sky_image is None:
+            log.message('   - sky wavelength-calibrated image not found!', with_header=False)
             return None
-
-        # Check sky continuum fit image
-        if work['wrk_config'] not in work['exposures']['sky'].keys():
-            # Add message to log
-            msg = '   - {0}: sky image not found!'.format(work['wrk_config'])
-            log.message(msg, with_header=False)
-            # Get outa here!
-            return None
-
-        # Initialise sky image
-        sky_a_image = None
-
-        # Loop for sky continuum fit entries...
-        for sky_a in work['exposures']['sky'][work['wrk_config']]['a']:
-
-            # Open sky continuum fit image file
-            with fits.open(sky_a['file'], mode='readonly') as skyhdu:
-
-                # Check target name of sky continuum fit image file
-                if product_object(skyhdu) == trg_name:
-                    # Set sky continuum fit image
-                    sky_a_image = product_flux_data(skyhdu).copy()
-                    break
-
-        # Check sky image
-        if sky_a_image is None:
-            # Add message to log
-            msg = ('   - {0}: sky wavelength-calibrated image not found!').format(work['wrk_config'])
-            log.message(msg, with_header=False)
-            # Get outa here!
-            return None
-        # set sky image to use for mask
-        sky_image = sky_a_image.copy()
         # Set gpm threshold dictionary for masking sky spectral channels fit
         sky_thresh = work['continuum']['gpm']['threshold']
 
