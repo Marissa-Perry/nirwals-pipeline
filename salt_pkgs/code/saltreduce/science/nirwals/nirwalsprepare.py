@@ -17,7 +17,7 @@ from datetime import datetime
 import numpy as np
 # astropy import
 from astropy.io import fits
-from scipy.ndimage import median_filter, convolve, label
+from scipy.ndimage import median_filter
 from astropy.stats import mad_std
 # matplotlib imports
 import matplotlib.pyplot as plt
@@ -41,6 +41,9 @@ from ...spectroscopy.ifu import trace_fibres
 # - functions
 from ...functions import Fit1D
 from ...functions import ipc_correction_global
+from ...functions import isolated_hot_pixels
+from ...functions import build_alpha_maps
+from ...functions import expected_dark_noise
 from ...functions import OVERFLOW_LIMIT
 
 # ---------------------------------------------------------------------------- #
@@ -156,7 +159,9 @@ def generate_bpm(obs_date, log, **kwargs):
 
     # set once the BPM is generated below, for the correction loop further down
     correct_neighbors = False
-    alpha = None
+    alpha_row = None
+    alpha_col = None
+    measured = None
 
     # check if BPM generation was overrided for this observation night and retrieve BPM in prd dir
     if not generate:
@@ -202,10 +207,13 @@ def generate_bpm(obs_date, log, **kwargs):
                 flag_union[flags == 1] = 1
 
         # ---------- locate combined masters ----------
+        # dark product paths only, for bookkeeping -- their SCI data isn't read here since the
+        # per-file correction loop below overwrites it in place on every run
         dark_wildcard = os.path.join(prd_dir, '{0}{1}Dark*.fits'.format(prefix, obs_date))
         dark_files = sorted(glob.glob(dark_wildcard))
         if len(dark_files) == 0:
             raise RuntimeError(f'No combined dark files found for {obs_date}')
+        product_file_by_exptime = {fits.getheader(f, PRIMARY)['EXPTIME']: f for f in dark_files}
 
         flat_wildcard = os.path.join(prd_dir, '{0}{1}Flat*.fits'.format(prefix, obs_date))
         flat_files = sorted(glob.glob(flat_wildcard))
@@ -242,18 +250,32 @@ def generate_bpm(obs_date, log, **kwargs):
             plt.close()
 
         # ---------- component 2: master darks ------------
+        # rebuilt fresh from raw exposures, grouped by EXPTIME and mean-combined -- the product
+        # *Dark*.fits files get IPC-corrected in place later in this function, so a second run
+        # can't use them as calibration input without compounding that correction
+        raw_wildcard = os.path.join(work_dir, '{0}/raw'.format(folder), '*reduced.fits')
+        raw_files = sorted(glob.glob(raw_wildcard))
+        dark_groups = {}
+        for raw_file in raw_files:
+            hdr = fits.getheader(raw_file, PRIMARY)
+            if hdr.get('OBSTYPE') != 'Dark':
+                continue
+            dark_groups.setdefault(hdr['EXPTIME'], []).append(raw_file)
+        if len(dark_groups) == 0:
+            raise RuntimeError(f'No raw dark exposures found for {obs_date}')
+
         bpm_dark = np.zeros(bpm.shape, dtype=bool)
         # raw data + background stats from the longest-exptime dark (component 4 input)
         longest_dark_data = None
+        longest_dark_file = None
         longest_dark_med = None
         longest_dark_sig = None
         longest_exptime = -1
+        longest_n_frames = None
         plot_dark = None   # arrays kept for the longest-exposure diagnostic only
 
-        for dark_file in dark_files:
-            with fits.open(dark_file) as hdul:
-                exptime = hdul[PRIMARY].header['EXPTIME']
-                d = hdul[SCI].data
+        for exptime, group_files in dark_groups.items():
+            d = np.mean([fits.getdata(f, SCI) for f in group_files], axis=0)
             finite = np.isfinite(d)
 
             med = np.median(d[finite])
@@ -274,39 +296,46 @@ def generate_bpm(obs_date, log, **kwargs):
                 longest_dark_data = d
                 longest_dark_med = med
                 longest_dark_sig = sig
+                longest_n_frames = len(group_files)
 
             # retain only the longest exposure (the most stressing case) for plotting
             if plot_dark is None or exptime > plot_dark['exptime']:
                 plot_dark = dict(exptime=round(exptime), data=d[finite], med=med, upper=upper, lower=lower, perc=bad_dark_perc)
 
+        longest_dark_file = product_file_by_exptime.get(longest_exptime)
         bpm[bpm_dark] = 1.
 
-        # ---------- component 4: inter-pixel crosstalk (mask hot/clustered pixels, correct every pixel) ----------
-        mask_center = config['bpm'].get('crosstalk', {}).get('mask_center', {}).get('apply', True)
+        # ---------- component 4: inter-pixel crosstalk correction ----------
         correct_neighbors = config['bpm'].get('crosstalk', {}).get('correct_neighbors', {}).get('apply', True)
-        if mask_center or correct_neighbors:
-            crosstalk_sigma = config['bpm']['crosstalk']['sigma']
-            # independent, stricter threshold -- not the same as the base 5sigma bpm_dark threshold
-            crosstalk_threshold = longest_dark_med + crosstalk_sigma * longest_dark_sig
-            trigger = np.isfinite(longest_dark_data) & (longest_dark_data > crosstalk_threshold)
+        alpha_row = config['bpm']['crosstalk']['correct_neighbors']['alpha_row']
+        alpha_col = config['bpm']['crosstalk']['correct_neighbors']['alpha_col']
+        if correct_neighbors:
+            measured = np.zeros(bpm.shape, dtype=bool)
+            isolation_radius = config['bpm']['crosstalk'].get('isolation_radius', 5)
+            # a pixel's own alpha is measured only where it's an isolated hot pixel -- the default alpha covers everywhere else
+            per_pixel_cfg = config['bpm']['crosstalk']['correct_neighbors'].get('per_pixel_alpha', {})
+            if per_pixel_cfg.get('apply', True):
+                alpha_sigma = per_pixel_cfg['sigma']
+                min_measured = per_pixel_cfg.get('min_measured', 200)
+                alpha_threshold = longest_dark_med + alpha_sigma * longest_dark_sig
+                _, alpha_candidates = isolated_hot_pixels(longest_dark_data, alpha_threshold, radius=isolation_radius)
+                alpha_row, alpha_col, measured, used_row, used_col = build_alpha_maps(
+                    longest_dark_data, longest_dark_med, alpha_candidates, alpha_row, alpha_col, min_measured=min_measured)
+                source = 'self-calibrated' if measured.sum() >= min_measured else 'config fallback'
+                log.message('   - crosstalk: {0} pixels given individually measured row/col alpha; default alpha_row={1:.4f}, alpha_col={2:.4f} ({3}sigma isolated hot pixels, {4}-pixel isolation radius, {5})'.format(
+                    measured.sum(), used_row, used_col, alpha_sigma, isolation_radius, source), with_header=False)
 
-            # isolation test (matches experiment_bpm.ipynb): no other trigger pixel within 5 pixels
-            box = np.ones((11, 11))
-            nearby_trigger_count = convolve(trigger.astype(float), box, mode='constant', cval=0.0)
-            isolated = trigger & (nearby_trigger_count == 1)
-            clustered = trigger & ~isolated
+                # expected noise on the dark's background level, for the calibration diagnostic plot
+                reduce_config_file = os.path.join(kwargs['config_dir'], 'nirwals', 'science_reduce.json')
+                reduce_config = load_json_file(reduce_config_file, raise_error=True)
+                gain = reduce_config['extract']['gain_default']
+                read_noise_table = {float(k): v for k, v in reduce_config['extract']['read_noise_electrons'].items()}
+                nearest_exptime = min(read_noise_table, key=lambda k: abs(k - longest_exptime))
+                read_noise_e = read_noise_table[nearest_exptime]
+                background_noise = expected_dark_noise(longest_dark_med, longest_exptime, longest_n_frames, gain, read_noise_e)
 
-            if mask_center:
-                bpm[isolated] = 1.
-                # a clustered defect has no valid single-pixel leakage model -- mask its whole contiguous region
-                if clustered.any():
-                    labeled, _ = label(trigger, structure=np.ones((3, 3), dtype=bool))
-                    bpm[np.isin(labeled, np.unique(labeled[clustered]))] = 1.
-
-            alpha = config['bpm']['crosstalk']['correct_neighbors']['alpha']
-
-            log.message('   - crosstalk: {0} hot pixels ({1:.0f}sigma threshold, {2:.0f}s dark), {3} isolated / {4} clustered; mask_center={5}, correct_neighbors={6}'.format(
-                trigger.sum(), crosstalk_sigma, longest_exptime, isolated.sum(), clustered.sum(), mask_center, correct_neighbors), with_header=False)
+                alpha_calibration_diagnostic_plot(longest_dark_data, longest_dark_med, longest_dark_sig, bpm_thresh_sigma,
+                                                   alpha_row, alpha_col, measured, used_row, used_col, background_noise, longest_exptime, bpm_dir)
 
         # ---------- diagnostic: longest-exposure master dark only ----------
         if plot_dark is not None:
@@ -378,8 +407,8 @@ def generate_bpm(obs_date, log, **kwargs):
         # ---------- bad-pixel percentage + header comment ----------
         bad = len(bpm[bpm == 1])
         perc_bad = (bad / bpm.size) * 100
-        crosstalk_comment = f'mask_center={mask_center}, correct_neighbors={correct_neighbors} at {crosstalk_sigma} sigma' if (mask_center or correct_neighbors) else 'not applied'
-        comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels. Crosstalk (longest-exptime hot pixels): {crosstalk_comment}.')
+        crosstalk_comment = f'correct_neighbors={correct_neighbors}' if correct_neighbors else 'not applied'
+        comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels. Crosstalk correction (longest-exptime hot pixels): {crosstalk_comment}.')
 
     # diagnostic plot for bpm image
     plt.figure(figsize=(10,5))
@@ -419,7 +448,11 @@ def generate_bpm(obs_date, log, **kwargs):
                 hdu_names = [hdu.name for hdu in hdul]
                 # correct IPC crosstalk across this file's own SCI data; BPM-flagged pixels can't leak into their neighbors
                 if correct_neighbors and SCI in hdu_names:
-                    hdul[SCI].data = ipc_correction_global(hdul[SCI].data, alpha, bad=(bpm == 1))
+                    before = hdul[SCI].data
+                    after = ipc_correction_global(before, alpha_row, alpha_col, bad=(bpm == 1), trusted_source=measured)
+                    hdul[SCI].data = after
+                    if prd_file == longest_dark_file:
+                        ipc_correction_diagnostic_plot(before, after, bpm, measured, longest_dark_med, longest_exptime, bpm_dir)
                 # remove existing BPM extension if present
                 if 'BPM' in hdu_names:
                     bpm_index = hdu_names.index('BPM')
@@ -463,7 +496,127 @@ def generate_bpm(obs_date, log, **kwargs):
 
     return
 
+# ---------------------------------------------------------------------------- #
+def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, exptime, bpm_dir, zoom_centre=(330, 1426), zoom_size=60):
+# ---------------------------------------------------------------------------- #
+    '''
+    Raw, raw-minus-background, corrected, and corrected-minus-background views of a region of
+    the longest-exposure master dark, arranged 2x2. Masked pixels are shaded out, in whichever
+    of black/white reads least like real data on that panel's colormap; pixels with their own
+    measured alpha get a circle drawn over them.
+    '''
+    rows, cols = before.shape
+    cx, cy = zoom_centre
+    half = zoom_size // 2
+    r0, r1 = max(0, cy - half), min(rows, cy + half)
+    c0, c1 = max(0, cx - half), min(cols, cx + half)
+    before = before[r0:r1, c0:c1]
+    after = after[r0:r1, c0:c1]
+    bpm = bpm[r0:r1, c0:c1]
+    measured = measured[r0:r1, c0:c1]
+    extent = [c0, c1, r0, r1]   # keeps the real column/row numbers on the plot axes
 
+    raw_residual = before - median_dark   # each pixel's excess over the frame's own dark-current background
+    residual = after - median_dark
+
+    good = bpm == 0
+    vmin, vmax = np.nanpercentile(before[good], [1, 99])
+    rlim = max(np.nanpercentile(np.abs(raw_residual[good]), 99), np.nanpercentile(np.abs(residual[good]), 99))   # shared scale so before/after are directly comparable
+
+    # one overlay per masking color, transparent (alpha=0) everywhere a pixel isn't masked
+    overlay_black = np.zeros((*before.shape, 4))
+    overlay_black[bpm == 1] = [0, 0, 0, 1]
+    overlay_white = np.zeros((*before.shape, 4))
+    overlay_white[bpm == 1] = [1, 1, 1, 1]
+    # pixel centres of the individually-measured ones, for the circle markers below
+    circle_rows, circle_cols = np.where(measured)
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    panels = [(before, 'raw', 'gray', vmin, vmax, overlay_black),
+              (raw_residual, r'raw $-$ background', 'berlin', -rlim, rlim, overlay_black),
+              (after, 'corrected', 'gray', vmin, vmax, overlay_black),
+              (residual, r'corrected $-$ background', 'berlin', -rlim, rlim, overlay_black)]
+    for ax, (data, title, cmap, lo, hi, overlay) in zip(axes.flat, panels):
+        im = ax.imshow(data, origin='lower', cmap=cmap, vmin=lo, vmax=hi, extent=extent)
+        ax.imshow(overlay, origin='lower', extent=extent)
+        for rm, cm in zip(circle_rows, circle_cols):
+            ax.add_patch(plt.Circle((c0 + cm + 0.5, r0 + rm + 0.5), radius=3, fill=False, edgecolor='white', linewidth=0.4))
+        ax.set_title(title, fontsize=15)
+        fig.colorbar(im, ax=ax, label='counts / s', shrink=1.0)
+    fig.suptitle(fr'{round(exptime,-2)}s master dark', fontsize=18)
+
+    plot_dir = os.path.join(bpm_dir, 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    filepath = os.path.join(plot_dir, 'IPC_correction.png')
+    plt.savefig(filepath, dpi=500, format='png', bbox_inches='tight')
+    plt.close()
+
+# ---------------------------------------------------------------------------- #
+def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_row_map, alpha_col_map,
+                                       measured, used_row, used_col, background_noise, exptime, bpm_dir):
+# ---------------------------------------------------------------------------- #
+    '''
+    Scatter of alpha_row/alpha_col against pixel brightness for every individually-measured
+    isolated hot pixel, with a marginal histogram of the same values. Shows the row/col alpha
+    actually applied this run (which may differ from this night's own measured median when too
+    few pixels were measured to trust it) and the expected shot+read noise band around the
+    dark's own background level.
+    '''
+    central_values = dark[measured] - med
+    row_values = alpha_row_map[measured]
+    col_values = alpha_col_map[measured]
+    combined_values = (row_values + col_values) / 2
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 5), sharey=True, gridspec_kw={'width_ratios': [3, 1], 'wspace': 0})
+
+    ax1.axvline(med, color='grey', ls='dotted', lw=1.2)
+    ax1.axvspan(med - background_noise, med + background_noise, color='grey', alpha=0.2)
+    ax1.text(med + 0.005, 0.043, 'dark-current\nbackground', color='grey', ha='center', fontsize=14)
+
+    # combined (row+col averaged) alpha, shown as grey background context
+    ax1.scatter(central_values, combined_values, s=8, alpha=0.1, color='#9a8c98')
+    ax1.axhline(np.median(combined_values), color='#9a8c98', ls='--', lw=1.2, zorder=4)
+
+    # row and column alpha, highlighted in the foreground -- median lines use what was actually
+    # applied (used_row/used_col), since that can differ from this night's own measured median
+    # whenever too few pixels were measured and the config fallback was used instead
+    ax1.scatter(central_values, row_values, s=8, alpha=0.15, color='#fec89a')
+    ax1.scatter(central_values, col_values, s=8, alpha=0.15, color='#B9CBC0')
+    ax1.axhline(used_row, color='#FD8721', ls='--', lw=1.2, zorder=5)
+    ax1.axhline(used_col, color='#577562', ls='--', lw=1.2, zorder=6)
+
+    ax1.axvline(med + bpm_thresh_sigma * sig, color='black', lw=1.2)
+    ax1.text(med + bpm_thresh_sigma * sig + 0.3, 0.043, fr'{bpm_thresh_sigma}$\sigma$'+'\n'+'hot pixel', color='black', ha='center', fontsize=14)
+
+    ax1.set_xscale('log')
+    ax1.set_xlabel('pixel value [counts/s]', fontsize=16, labelpad=15)
+    ax1.set_ylabel(r'$\alpha$', fontsize=20, labelpad=15)
+    ax1.grid(axis='y', color='grey', alpha=0.15)
+    ax1.set_ylim(-0.0001, 0.04)
+    ax1.tick_params(labelsize=14)
+
+    # right panel: how alpha is distributed, sharing the same y-axis as the scatter -- median
+    # labels live here instead of on the scatter, next to the distribution they describe
+    bins = np.linspace(-0.005, 0.05, 100)
+    ax2.hist(combined_values, bins=bins, orientation='horizontal', color='#9a8c98', alpha=0.5)
+    ax2.hist(row_values, bins=bins, orientation='horizontal', color='#fec89a', alpha=0.5)
+    ax2.hist(col_values, bins=bins, orientation='horizontal', color='#B9CBC0', alpha=0.5)
+    ax2.axhline(np.median(combined_values), color='#9a8c98', ls='--', lw=1.2)
+    ax2.axhline(used_row, color='#FD8721', ls='--', lw=1.2)
+    ax2.axhline(used_col, color='#577562', ls='--', lw=1.2)
+    ax2.text(700, used_row, fr'$\alpha_{{\rm row}}={used_row:.3f}$', color='#FD8721', fontsize=12)
+    ax2.text(700, used_col, fr' $\alpha_{{\rm col}}={used_col:.3f}$', color='#577562', fontsize=12)
+    ax2.text(700, np.median(combined_values), fr'$\alpha={np.median(combined_values):.3f}$', color='#9a8c98', fontsize=12)
+    ax2.set_xlabel('# of pixels', fontsize=16, labelpad=15)
+    plt.setp(ax2.get_yticklabels(), visible=False)
+    ax2.tick_params(labelsize=14)
+
+    plt.tight_layout()
+    plot_dir = os.path.join(bpm_dir, 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    filepath = os.path.join(plot_dir, 'alpha_calibration.png')
+    plt.savefig(filepath, dpi=500, format='png', bbox_inches='tight')
+    plt.close()
 
 # ---------------------------------------------------------------------------- #
 def prepare_flat_fit(obs_date, log, **kwargs):

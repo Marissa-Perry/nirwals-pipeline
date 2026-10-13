@@ -11,4 +11,7 @@ from .saltfitting import CurFit
 from .saltfitting import InterFit
 # - detector corrections
 from .ipc_correction import ipc_correction_global
+from .ipc_correction import isolated_hot_pixels
+from .ipc_correction import build_alpha_maps
+from .ipc_correction import expected_dark_noise
 from .ipc_correction import OVERFLOW_LIMIT
