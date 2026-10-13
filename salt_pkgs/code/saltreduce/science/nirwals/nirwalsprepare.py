@@ -17,7 +17,7 @@ from datetime import datetime
 import numpy as np
 # astropy import
 from astropy.io import fits
-from scipy.ndimage import median_filter, binary_dilation
+from scipy.ndimage import median_filter, convolve, label
 from astropy.stats import mad_std
 # matplotlib imports
 import matplotlib.pyplot as plt
@@ -40,6 +40,8 @@ from ...spectroscopy.ifu import set_fibre_traces
 from ...spectroscopy.ifu import trace_fibres
 # - functions
 from ...functions import Fit1D
+from ...functions import ipc_correction_global
+from ...functions import OVERFLOW_LIMIT
 
 # ---------------------------------------------------------------------------- #
 
@@ -151,6 +153,10 @@ def generate_bpm(obs_date, log, **kwargs):
     # Set bpm sigma threshold factor from config
     bpm_thresh_sigma = config['bpm']['threshold']['sigma']  # using threshold set in config file
     generate = config['bpm']['generate']
+
+    # set once the BPM is generated below, for the correction loop further down
+    correct_neighbors = False
+    alpha = None
 
     # check if BPM generation was overrided for this observation night and retrieve BPM in prd dir
     if not generate:
@@ -275,20 +281,32 @@ def generate_bpm(obs_date, log, **kwargs):
 
         bpm[bpm_dark] = 1.
 
-        # ---------- component 4: inter-pixel crosstalk (neighbors of hot pixels) ----------
-        apply_crosstalk = config['bpm'].get('crosstalk', {}).get('apply', True)
-        if apply_crosstalk:
+        # ---------- component 4: inter-pixel crosstalk (mask hot/clustered pixels, correct every pixel) ----------
+        mask_center = config['bpm'].get('crosstalk', {}).get('mask_center', {}).get('apply', True)
+        correct_neighbors = config['bpm'].get('crosstalk', {}).get('correct_neighbors', {}).get('apply', True)
+        if mask_center or correct_neighbors:
             crosstalk_sigma = config['bpm']['crosstalk']['sigma']
             # independent, stricter threshold -- not the same as the base 5sigma bpm_dark threshold
             crosstalk_threshold = longest_dark_med + crosstalk_sigma * longest_dark_sig
-            bpm_crosstalk_trigger = np.isfinite(longest_dark_data) & (longest_dark_data > crosstalk_threshold)
-            # cross-shaped (4-connected) dilation: each hot pixel also flags its 4 neighbors
-            cross_structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
-            bpm_crosstalk = binary_dilation(bpm_crosstalk_trigger, structure=cross_structure)
-            crosstalk_perc = 100 * (bpm_crosstalk & ~bpm_crosstalk_trigger).sum() / bpm_crosstalk.size
-            bpm[bpm_crosstalk] = 1.
-            log.message('   - crosstalk BPM: {0:.2f}% additionally flagged ({1:.0f}sigma threshold, {2:.0f}s dark)'.format(
-                crosstalk_perc, crosstalk_sigma, longest_exptime), with_header=False)
+            trigger = np.isfinite(longest_dark_data) & (longest_dark_data > crosstalk_threshold)
+
+            # isolation test (matches experiment_bpm.ipynb): no other trigger pixel within 5 pixels
+            box = np.ones((11, 11))
+            nearby_trigger_count = convolve(trigger.astype(float), box, mode='constant', cval=0.0)
+            isolated = trigger & (nearby_trigger_count == 1)
+            clustered = trigger & ~isolated
+
+            if mask_center:
+                bpm[isolated] = 1.
+                # a clustered defect has no valid single-pixel leakage model -- mask its whole contiguous region
+                if clustered.any():
+                    labeled, _ = label(trigger, structure=np.ones((3, 3), dtype=bool))
+                    bpm[np.isin(labeled, np.unique(labeled[clustered]))] = 1.
+
+            alpha = config['bpm']['crosstalk']['correct_neighbors']['alpha']
+
+            log.message('   - crosstalk: {0} hot pixels ({1:.0f}sigma threshold, {2:.0f}s dark), {3} isolated / {4} clustered; mask_center={5}, correct_neighbors={6}'.format(
+                trigger.sum(), crosstalk_sigma, longest_exptime, isolated.sum(), clustered.sum(), mask_center, correct_neighbors), with_header=False)
 
         # ---------- diagnostic: longest-exposure master dark only ----------
         if plot_dark is not None:
@@ -360,13 +378,12 @@ def generate_bpm(obs_date, log, **kwargs):
         # ---------- bad-pixel percentage + header comment ----------
         bad = len(bpm[bpm == 1])
         perc_bad = (bad / bpm.size) * 100
-        crosstalk_comment = f'applied at {crosstalk_sigma} sigma' if apply_crosstalk else 'not applied'
-        comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels. Crosstalk masking (4-neighbor dilation of longest-exptime hot pixels): {crosstalk_comment}.')
+        crosstalk_comment = f'mask_center={mask_center}, correct_neighbors={correct_neighbors} at {crosstalk_sigma} sigma' if (mask_center or correct_neighbors) else 'not applied'
+        comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels. Crosstalk (longest-exptime hot pixels): {crosstalk_comment}.')
 
     # diagnostic plot for bpm image
-    crosstalk_status = 'enabled' if config['bpm'].get('crosstalk', {}).get('apply', True) else 'disabled'
     plt.figure(figsize=(10,5))
-    plt.title(fr'{perc_bad:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$, pixel crosstalk mask {crosstalk_status}', fontsize=12, pad=15)
+    plt.title(fr'{perc_bad:.1f}% bad pixels, threshold={bpm_thresh_sigma}$\sigma$', fontsize=12, pad=15)
     plt.imshow(bpm, origin='lower', cmap='Greys_r', vmin=0, vmax=1) 
     # Set png file
     plot_dir = os.path.join(bpm_dir,'plots')
@@ -400,6 +417,9 @@ def generate_bpm(obs_date, log, **kwargs):
             with fits.open(prd_file, mode='update') as hdul:
                 # ------- add "BPM" hdu -------
                 hdu_names = [hdu.name for hdu in hdul]
+                # correct IPC crosstalk across this file's own SCI data; BPM-flagged pixels can't leak into their neighbors
+                if correct_neighbors and SCI in hdu_names:
+                    hdul[SCI].data = ipc_correction_global(hdul[SCI].data, alpha, bad=(bpm == 1))
                 # remove existing BPM extension if present
                 if 'BPM' in hdu_names:
                     bpm_index = hdu_names.index('BPM')
@@ -565,8 +585,15 @@ def fit_continuum(image, config):
             # Move on!
             continue
 
+        # exclude corrupted/overflow pixels so one bad value can't break the whole row's fit
+        valid = cm & (np.abs(f) < OVERFLOW_LIMIT)
+
+        # too little real signal for this polynomial order (e.g. an unilluminated edge row) -- leave continuum at 0
+        if np.count_nonzero(f[valid]) <= 2 * continuum_fit['order']:
+            continue
+
         # Fit row flux
-        c_fit = Fit1D(p[cm], f[cm], **continuum_fit)
+        c_fit = Fit1D(p[valid], f[valid], **continuum_fit)
         # Set row continuum in continuum array
         continuum[i] = c_fit(p)
 ####>

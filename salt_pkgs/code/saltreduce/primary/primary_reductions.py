@@ -120,7 +120,7 @@ def group_frames(files, predicate, group_keys):
 
 def combine_group(group_files, out_path):
     """
-    Mean-combine the SCI extension across group_files, inheriting the header of the first file. 
+    Mean-combine the SCI extension across group_files, inheriting the header of the first file.
 
     Note: these master files are not dark subtracted
     """
@@ -307,7 +307,8 @@ def _dark_subtract(in_path, out_path, obs_date, pdir, inplace):
             dark = np.asarray(dh[SCI].data, dtype=float)
         dark = np.where(np.isfinite(dark), dark, 0.0)  # zero non-finite dark pixels
 
-        hdu[SCI].data = np.asarray(hdu[SCI].data, dtype=float) - dark
+        sci = np.asarray(hdu[SCI].data, dtype=float)
+        hdu[SCI].data = sci - dark
         hdu[PRIMARY].header['DARKSUB'] = (True, 'Master dark subtracted')
         hdu[PRIMARY].header['DARKFILE'] = (os.path.basename(dark_file), 'Master dark used')
 

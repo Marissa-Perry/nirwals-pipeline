@@ -29,7 +29,8 @@
         "generate": true,
         "notes": [
             "a. If true, will generate BPM from master flat, master darks, and pixels flagged during up-the-ramp sampling.",
-            "b. crosstalk.apply/sigma: flag the 4 neighbors of hot pixels above this many sigma (inter-pixel crosstalk)"
+            "b. crosstalk.mask_center: flags hot pixels (>= crosstalk.sigma above background).",
+            "c. crosstalk.correct_neighbors: deconvolves the alpha-fraction IPC leakage across every pixel, excluding BPM-flagged pixels as sources"
         ],
         "threshold": {
             "sigma": 5.0,
@@ -38,7 +39,13 @@
         },
         "crosstalk": {
             "sigma": 25.0,
-            "apply": true
+            "mask_center": {
+                "apply": true
+            },
+            "correct_neighbors": {
+                "apply": true,
+                "alpha": 0.011
+            }
         }
     },
 

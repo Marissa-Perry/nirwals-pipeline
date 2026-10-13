@@ -9,3 +9,6 @@ from .saltfunctions import get_evenly_spaced_array
 from .saltfitting import Fit1D
 from .saltfitting import CurFit
 from .saltfitting import InterFit
+# - detector corrections
+from .ipc_correction import ipc_correction_global
+from .ipc_correction import OVERFLOW_LIMIT

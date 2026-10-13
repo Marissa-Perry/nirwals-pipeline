@@ -211,6 +211,21 @@ def set_fibre_traces(fibres_config, work, log):
     return traces
 
 # ---------------------------------------------------------------------------- #
+def fit_trace(x, y, fit_kwargs):
+# ---------------------------------------------------------------------------- #
+    order = fit_kwargs['order']
+    kwargs = dict(fit_kwargs)
+    fit = Fit1D(x, y, **kwargs)
+    # near-flat trace
+    while np.isnan(fit.coef).any() and kwargs['order'] > 0:
+        # drop the order by one and retry until the fit is finite or order reaches 0.
+        kwargs['order'] -= 1
+        fit = Fit1D(x, y, **kwargs)
+    # pad back out to the requested order's coefficient count (callers reconstruct with a fixed order)
+    fit.coef = np.pad(fit.coef, (0, order + 1 - len(fit.coef)))
+    return fit
+
+# ---------------------------------------------------------------------------- #
 def trace_fibres(traces, fibres, windows, work, log):
 # ---------------------------------------------------------------------------- #
 
@@ -270,7 +285,7 @@ def trace_fibres(traces, fibres, windows, work, log):
             return False, traces
 
         # Fit lower trace
-        lower_fit = Fit1D(mid_points[gz], l_trace[gz], **work['trace']['fit'])
+        lower_fit = fit_trace(mid_points[gz], l_trace[gz], work['trace']['fit'])
         # Check lower trace fit coefficients for NaN
         if np.isnan(lower_fit.coef).any():
             # Add message to log
@@ -280,9 +295,9 @@ def trace_fibres(traces, fibres, windows, work, log):
             return False, traces
 
         # Fit upper trace
-        upper_fit = Fit1D(mid_points[gz], u_trace[gz], **work['trace']['fit'])
+        upper_fit = fit_trace(mid_points[gz], u_trace[gz], work['trace']['fit'])
         # Check upper trace fit coefficients for NaN
-        if np.isnan(lower_fit.coef).any():
+        if np.isnan(upper_fit.coef).any():
             # Add message to log
             msg = ('   - fitting upper trace returned NaN coefficient(s): '
                    'Fibre {0}').format(id)
