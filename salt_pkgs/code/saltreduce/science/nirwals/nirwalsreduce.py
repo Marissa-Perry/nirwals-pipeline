@@ -2055,6 +2055,9 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         msg = '   - sky continuum: scaling disabled (enable=0); using unscaled sky continuum'
     log.message(msg, with_header=False)
 
+    # the sky continuum subtracted off can never exceed the science frame's own continuum
+    sky_cf_image_scaled = np.minimum(sky_cf_image_scaled, sci_cf_image)
+
     # restores the science frame's own continuum, subtracting sky's continuum contribution
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image_scaled)
 
@@ -2075,7 +2078,8 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         med_sci[has_cols] = np.nanmedian(np.where(valid[:, has_cols], sci_frame_fibers[:, has_cols], np.nan), axis=0)
         med_sky[has_cols] = np.nanmedian(np.where(valid[:, has_cols], sky_frame_fibers[:, has_cols], np.nan), axis=0)
         sci_cf_obj_mean = sci_cf_image[obj_bundle_mask].mean(axis=0)
-        sky_continuum_unscaled_plot(work, sci_frame_fibers, sky_frame_fibers, med_sci, med_sky, sci_cf_obj_mean, sky_cf_obj_mean)
+        sky_cf_obj_mean_capped = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)   # reflects the ceiling applied above
+        sky_continuum_unscaled_plot(work, sci_frame_fibers, sky_frame_fibers, med_sci, med_sky, sci_cf_obj_mean, sky_cf_obj_mean_capped)
 
     # Add sky subtracted header key, noting whether continuum scaling was included
     value = time.asctime(time.localtime())
