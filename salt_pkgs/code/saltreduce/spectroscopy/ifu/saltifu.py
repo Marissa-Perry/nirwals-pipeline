@@ -323,7 +323,7 @@ def renormalize_good_pixels(arr, good_count, expected_count, valid):
     return out
 
 # ---------------------------------------------------------------------------- #
-def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark_rate, smooth_params):
+def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark_rate, exptime, smooth_params):
 # ---------------------------------------------------------------------------- #
     '''
     Horne 1986 optimal extraction method.
@@ -335,20 +335,23 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     flt_col_sums[flt_col_sums == 0] = 1.0
     P = flt_ap / flt_col_sums   # normalised to sum to 1 per column
 
-    sci_e = sci * gain               # [counts] --> [e-], science in electrons
-    # variance in electrons: read noise + source/sky shot noise (observed signal) + dark-current shot noise 
-    V_e = read_noise**2 + np.abs(sci_e) + gain * dark_rate
-    V_e[V_e <= 0] = 1.0                  # avoid division by zero
-    V_e[gpm == 0] = 1e30             # bad pixels get very high variance
-    sci_ap = sci_e * aperture_weight  # down-weight the flat ion the edge rows by how much of each row is really in the fiber
+    # variance of the rate (sci, dark_rate are counts/s): source/dark shot noise + read noise, both converted
+    # from electrons on the total exposure down to (counts/s)^2 by dividing through gain*exptime
+    V = (np.abs(sci) + dark_rate) / (gain * exptime) + read_noise**2 / (gain * exptime)**2
+    V[V <= 0] = 1.0                  # avoid division by zero
+    V[gpm == 0] = 1e30             # bad pixels get very high variance
+    sci_ap = sci * aperture_weight  # down-weight the flat ion the edge rows by how much of each row is really in the fiber
 
     # Horne 1986 Eq. 8
-    num = np.sum(P * sci_ap / V_e, axis=0)
-    den = np.sum(P**2 / V_e, axis=0)       # ''
+    num = np.sum(P * sci_ap / V, axis=0)
+    den = np.sum(P**2 / V, axis=0)       # ''
     good = den > 0                         # avoid divide by zero
-    F_e = np.zeros_like(den, dtype=np.float32)
-    F_e[good] = num[good] / den[good]      # [e-]
-    F = F_e / gain                         # [e-] --> [counts] 
+    F = np.zeros_like(den, dtype=np.float32)
+    F[good] = num[good] / den[good]      # [counts/s]
+
+    # Horne 1986 Eq. 9: variance of the weighted estimator, [counts/s]^2
+    var = np.full_like(den, np.inf, dtype=np.float32)
+    var[good] = 1.0 / den[good]
 
     # flat-field extracted spectra
     flt_col_sums = flt_ap.sum(axis=0)    # same sum as P's normalisation - bad-pixel biases cancel in F/response below
@@ -371,9 +374,11 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     good = response != 0
     # leftover pixel-to-pixel response used to flat-field extracted spectra
     F[good] = F[good] / response[good]
+    var[good] = var[good] / response[good]**2
 
     F[~np.isfinite(F)] = 0.0
-    return F
+    var[~np.isfinite(var)] = np.inf
+    return F, var
 
 # ---------------------------------------------------------------------------- #
 def extract_fibre_boxcar(sciarr, gpmarr, fltarr, smooth_params):
@@ -429,7 +434,7 @@ def get_plot_dir(work, category):
     return plot_dir
 
 # ---------------------------------------------------------------------------- #
-def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_rate, smooth_params, work):
+def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_rate, exptime, smooth_params, work):
 # ---------------------------------------------------------------------------- #
     '''
     Top: extracted spectrum using both optimal and boxcar methods. 
@@ -454,7 +459,7 @@ def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, ape
     W_box = normalize(aperture_weight * gpm)      # boxcar effective weight (top-hat over good rows)
 
     # extracted data from optimal and boxcar for fiber spectrum
-    F_opt = extract_fibre_optimal(sci_opt.copy(), gpm.copy(), flt.copy(), gain, read_noise, aperture_weight, dark_rate, smooth_params)
+    F_opt, var_opt = extract_fibre_optimal(sci_opt.copy(), gpm.copy(), flt.copy(), gain, read_noise, aperture_weight, dark_rate, exptime, smooth_params)
     F_box = extract_fibre_boxcar(sciarr.copy(), gpmarr, fltarr.copy(), smooth_params)
     gpm_per_col = gpm.sum(axis=0)
 
@@ -467,6 +472,8 @@ def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, ape
     axC = fig.add_subplot(top[1], sharex=axS)
 
     axS.set_title(f'extracted spectrum for fibre #{id} (method set to {method})', fontsize=15, pad=12)
+    sigma_opt = np.sqrt(np.where(np.isfinite(var_opt) & (var_opt > 0), var_opt, np.nan))
+    axS.fill_between(cols, F_opt - sigma_opt, F_opt + sigma_opt, step='mid', color='blue', alpha=0.15, linewidth=0.6, zorder=0)
     axS.step(cols, F_box, where='mid', lw=0.8, color='red',  alpha=0.6, label='boxcar')
     axS.step(cols, F_opt, where='mid', lw=0.8, color='blue', alpha=0.6, label='optimal')
     axS.set_ylabel('[counts / s]', fontsize=12, labelpad=12)
@@ -533,10 +540,11 @@ def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, ape
     plt.close(fig)
 
 # ---------------------------------------------------------------------------- #
-def plot_fibre_extraction(work, id, fibre_type, spectrum, gpm_per_col):
+def plot_fibre_extraction(work, id, fibre_type, spectrum, gpm_per_col, variance=None):
 # ---------------------------------------------------------------------------- #
     '''
-    Top: extracted spectrum for a single fibre, using the exposure's configured extraction method.
+    Top: extracted spectrum for a single fibre, using the exposure's configured extraction method
+    (+ 1-sigma band from variance, if given -- boxcar has no noise model, so this is optimal-only).
     Bottom: good-pixel count per wavelength column.
     '''
     cols = np.arange(spectrum.shape[0])
@@ -545,6 +553,9 @@ def plot_fibre_extraction(work, id, fibre_type, spectrum, gpm_per_col):
 
     bundle = 'sky-bundle' if fibre_type == 'sky' else 'object-bundle'
     axS.set_title(f'fibre #{id} ({bundle})', fontsize=15, pad=13)
+    if variance is not None:
+        sigma = np.sqrt(np.where(np.isfinite(variance) & (variance > 0), variance, np.nan))
+        axS.fill_between(cols, spectrum - sigma, spectrum + sigma, step='mid', color='grey', alpha=0.3, linewidth=0.6, zorder=0)
     axS.step(cols, spectrum, where='mid', lw=0.5, color='black')
     axS.axhline(0, linestyle='dashed', lw=0.8, color='grey')
     axS.set_ylabel('[counts / s]', fontsize=12, labelpad=12)
@@ -611,7 +622,7 @@ def plot_flat_throughput_smoothing(work, id, fibre_type, flt_2D, gpm_2D, apertur
     plt.close(fig)
 
 # ---------------------------------------------------------------------------- #
-def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_noise, work, log):
+def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_noise, exptime, work, log):
 # ---------------------------------------------------------------------------- #
     '''
     Extract all fibres from the 2D images using the configured method (optimal or boxcar).
@@ -631,8 +642,10 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
     traces : fibre traces dictionary
     gain : [e-]
     read_noise : [e-]
+    exptime : [s], for the optimal method's variance model
 
-    Returns (fibres, good_pixels)
+    Returns (fibres, good_pixels, variances) -- variances is inf (boxcar, no noise model) or the
+    Horne formal extraction variance (optimal), both keyed the same as fibres/good_pixels.
     '''
     # Set extraction method (default optimal)
     method = work.get('extract_method', 'optimal')
@@ -662,8 +675,8 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
     plot_all_fibre_extractions = bool(work['debug'])
     #########################
 
-    # Initialise extracted fibres and good pixels dictionaries
-    fibres, good_pixels = {}, {}
+    # Initialise extracted fibres, good pixels, and variance dictionaries
+    fibres, good_pixels, variances = {}, {}, {}
 
     # Loop for fibre traces...
     for id, fibre in traces.items():
@@ -699,7 +712,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
             sciarr = set_fibre_array(sci, r_min, r_max, valid, work)
             fltarr = set_fibre_array(flt, r_min, r_max, valid, work)
 
-            plot_extraction_comparison(method, id, cols_to_debug, sci_2D, gpm_2D, flt_2D, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_2D, smooth_params, work)
+            plot_extraction_comparison(method, id, cols_to_debug, sci_2D, gpm_2D, flt_2D, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_2D, exptime, smooth_params, work)
         #######################################################################
 
         # =========================== BOXCAR ===========================
@@ -712,8 +725,9 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
                 # Extract fibre flat field array
                 fltarr = set_fibre_array(flt, r_min, r_max, valid, work)
 
-            # Add fibre flux to extracted fibres dictionary
+            # Add fibre flux to extracted fibres dictionary -- boxcar has no noise model
             fibres[id] = extract_fibre_boxcar(sciarr, gpmarr, fltarr, smooth_params)
+            variances[id] = np.full(fibres[id].shape, np.inf, dtype=np.float32)
 
         # =========================== OPTIMAL ==========================
         elif method == 'optimal':
@@ -730,7 +744,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
             dark_2D = dark_rate[r_min:r_max, :].copy()
 
             # Add fibre flux to extracted fibres dictionary
-            fibres[id] = extract_fibre_optimal(sci_2D, gpm_2D, flt_2D, gain, read_noise, aperture_weight, dark_2D, smooth_params)
+            fibres[id], variances[id] = extract_fibre_optimal(sci_2D, gpm_2D, flt_2D, gain, read_noise, aperture_weight, dark_2D, exptime, smooth_params)
 
             ######################## FLAT THROUGHPUT SMOOTHING PLOT  ###############
             if plot_all_fibre_extractions:
@@ -742,10 +756,10 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
 
         ######################## PER-FIBRE EXTRACTION PLOT  ###################
         if plot_all_fibre_extractions:
-            plot_fibre_extraction(work, id, fibre.get('type', 'object'), fibres[id], gpmarr)
+            plot_fibre_extraction(work, id, fibre.get('type', 'object'), fibres[id], gpmarr, variance=variances[id])
         #########################################################################
 
-    return fibres, good_pixels
+    return fibres, good_pixels, variances
 
 # ---------------------------------------------------------------------------- #
 def set_fibre(fibre, work):

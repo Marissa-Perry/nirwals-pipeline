@@ -656,12 +656,14 @@ def extract_fibres_from_image(hdu, traces, work, log):
     # set gain and read noise -- GAIN in the header is unreliable (see work['extract'] notes)
     gain = work['extract']['gain_default']
     read_noise = set_read_noise(hdu, work)
+    exptime = hdu[PRIMARY].header['EXPTIME']
 
     # fiber extraction
-    fibres, good_pixels = extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_noise, work, log)
+    fibres, good_pixels, variances = extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_noise, exptime, work, log)
 
-    # Set good pixels dictionary in work dictionary
+    # Set good pixels and per-pixel variance dictionaries in work dictionary
     work['good_pixels'] = good_pixels
+    work['variances'] = variances
 
     # Check if debug
     if work['debug']:
@@ -859,8 +861,10 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     fibre_image = stack_fibre_image(traces, fibres)
     # Stack good pixels count image: fibre type 'all'
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
+    # Stack per-pixel variance image: fibre type 'all'
+    variance_image = stack_fibre_image(traces, work['variances'])
 
-    # Compute spectral resolution from this lamp's arc lines and attach it to the wavelength solution 
+    # Compute spectral resolution from this lamp's arc lines and attach it to the wavelength solution
     log.message(' - computing spectral resolution', with_header=False)
     try:
         res = compute_spectral_resolution(fibre_image, work, log)
@@ -882,7 +886,7 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
     comment = 'Image has been wavelength calibrated'
     hdu['Primary'].header['WAVECAL'] = (value, comment)
     # Write new fits file
-    write_new_fits(hdu, fibre_image, gpcnt_image, '', 'a', work, log)
+    write_new_fits(hdu, fibre_image, gpcnt_image, '', 'a', work, log, variance_image=variance_image)
 
     # Add work wavelength solution (as needed)
     add_wavelength_solution(ws, solutions, work, log)
@@ -940,13 +944,15 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     fibre_image = stack_fibre_image(traces, fibres)
     # Stack good pixels count image: fibre type 'all'
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
+    # Stack per-pixel variance image: fibre type 'all'
+    variance_image = stack_fibre_image(traces, work['variances'])
 
     # Add rectified (wavelength calibrated) header key
     value = time.asctime(time.localtime())
     comment = 'Image has been wavelength calibrated'
     hdu['Primary'].header['WAVECAL'] = (value, comment)
     # Write new fits file: extracted 'all' fibres
-    write_new_fits(hdu, fibre_image, gpcnt_image, '', 'a', work, log)
+    write_new_fits(hdu, fibre_image, gpcnt_image, '', 'a', work, log, variance_image=variance_image)
 
     # Reset 1D wavelength pixel (columns) array for original nr of columns
     work['p'] = np.arange(work['cols'], dtype=np.float32)
@@ -977,10 +983,10 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
         skycorr_ssc = skycorr_ss
         if sky_scaled is not None and sky_cf_image is not None:
             skycorr_ssc = sky_scaled + sky_cf_image
-        # Write new fits file: sky subtracted without continuum
-        write_new_fits(hdu, sci_image, gpcnt_image, '', 'ss', work, log, skycorr=skycorr_ss)
+        # Write new fits file: sky subtracted without continuum (variance is the pre-subtraction one -- doesn't include the sky exposure's own shot noise)
+        write_new_fits(hdu, sci_image, gpcnt_image, '', 'ss', work, log, skycorr=skycorr_ss, variance_image=variance_image)
         # Write new fits file: sky subtracted with continuum
-        write_new_fits(hdu, sci_image_with_cont, gpcnt_image, '', 'ssc', work, log, skycorr=skycorr_ssc)
+        write_new_fits(hdu, sci_image_with_cont, gpcnt_image, '', 'ssc', work, log, skycorr=skycorr_ssc, variance_image=variance_image)
 
     return
 
@@ -2520,34 +2526,13 @@ def stack_fibre_image(traces, fibres, fibre_type='all', dtype=np.float32):
     return fibre_image
 
 # ---------------------------------------------------------------------------- #
-def poisson_ivar(flux, gpcnt, exptime, gain):
-    """
-    Poisson inverse variance.
-    Renormalizes by per-fiber mean good-pixel count.
-    """
-    flux = np.asarray(flux, float)
-    gpcnt = np.asarray(gpcnt, float)
-    renorm = np.nanmean(gpcnt, axis=1, keepdims=True) * np.ones_like(flux)   # per-fiber mean gpcnt
-    mask = gpcnt > 0
-    counts = np.full(flux.shape, np.nan)
-    counts[mask] = (flux[mask] / renorm[mask]) * exptime           # un-normalized counts per pixel
-    sigma = np.full(flux.shape, np.nan)
-    sigma[mask] = (np.sqrt(np.abs(counts[mask]) / gain) / exptime) * renorm[mask]
-    ivar = np.zeros(flux.shape, dtype=np.float32)
-    good = np.isfinite(sigma) & (sigma > 0)
-    ivar[good] = 1.0 / sigma[good] ** 2
-    return ivar
-
-
-def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=None):
+def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=None, variance_image=None):
 # ---------------------------------------------------------------------------- #
 
     # Check new image
     if new_image is None: return hdu
 
     orig = hdu[PRIMARY].header
-    exptime = orig.get('EXPTIME')
-    gain = work['extract']['gain_default']
 
     hdu_new = []
 
@@ -2566,27 +2551,28 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=Non
     # --- 2 IVAR / 3 MASK (BPM, GPCNT == 0) ---
     if gp_image is not None:
         gp = np.asarray(gp_image)
-        flux = np.asarray(new_image)
-        n_flux, n_gp = flux.shape[1], gp.shape[1]
+        var = np.asarray(variance_image) if variance_image is not None else None
+        n_flux, n_gp = new_image.shape[1], gp.shape[1]
 
-        # FLUX and GPCNT can have different widths
-        # Rectification adds dead pixels to the blue edge of FLUX that GPCNT doesn't have 
+        # FLUX and GPCNT (and VARIANCE, same native width as GPCNT) can have different widths
+        # Rectification adds dead pixels to the blue edge of FLUX that GPCNT doesn't have
         # need to re-align them
-        off = n_flux - n_gp 
-        if off > 0:
-            flux_gp = flux[:, off:off + n_gp]  # FLUX wider,  drop its extra blue pixels
-        elif off < 0:
-            flux_gp = flux; gp = gp[:, -off:-off + n_flux]; off, n_gp = 0, n_flux  # GPCNT wider,  drop its extra
-        else:
-            flux_gp = flux   # same width,  nothing to align
+        off = n_flux - n_gp
+        if off < 0:
+            gp = gp[:, -off:-off + n_flux]  # GPCNT wider, drop its extra
+            if var is not None:
+                var = var[:, -off:-off + n_flux]
+            off, n_gp = 0, n_flux
 
-        if exptime is not None and gain is not None:
-            # errors on the aligned grid, then slot back into the full FLUX width
-            ivar_gp = poisson_ivar(flux_gp, gp, exptime, gain)  
+        if var is not None:
+            # extraction variance (read noise + shot noise + dark current), slotted into the full FLUX width
+            ivar_gp = np.zeros_like(var, dtype=np.float32)
+            good = np.isfinite(var) & (var > 0)
+            ivar_gp[good] = 1.0 / var[good]
             ivar = np.zeros((gp.shape[0], n_flux), dtype=np.float32)  # unmatched edge = 0
             ivar[:, off:off + n_gp] = ivar_gp
             hdu_ivar = fits.ImageHDU(data=ivar, name='IVAR')
-            hdu_ivar.header['EXTNAME'] = ('IVAR', 'object Poisson inverse variance of FLUX')
+            hdu_ivar.header['EXTNAME'] = ('IVAR', 'inverse variance of FLUX (read noise + shot noise + dark current)')
             hdu_new.append(hdu_ivar)
 
         # Unmatched edge starts all-bad
