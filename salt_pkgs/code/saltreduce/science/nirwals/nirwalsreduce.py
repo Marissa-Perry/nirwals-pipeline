@@ -2040,21 +2040,22 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     # Mean sky-frame continuum for the object-bundle rows
     obj_bundle_mask = ~sky_bundle_mask
     sky_cf_obj_mean = sky_cf_image[obj_bundle_mask].mean(axis=0)
+    sci_cf_obj_mean = sci_cf_image[obj_bundle_mask].mean(axis=0)
 
     if scale_sky_cont:
         obj_fit_cont = obj_cf(xarr)
         sky_fit_cont = sky_cf(xarr)
 
-        # ratio of the sky-bundle science/sky continuum fits
-        # wavelengths with negatvie continuum are left unscaled
-        good = (obj_fit_cont >= 0) & (sky_fit_cont >= 0) & (np.abs(sky_fit_cont) > 1e-8)
-        scale = np.ones(sci_cf_image.shape[1], dtype=np.float32)
-        scale[good] = obj_fit_cont[good] / sky_fit_cont[good]
+        deg = cfg['deg']
+        xn = 2 * (xarr - xarr.min()) / (xarr.max() - xarr.min()) - 1   # normalise to [-1, 1]
+        basis = np.polynomial.legendre.legvander(xn[fit_mask_1d], deg)
+        design = basis * sky_fit_cont[fit_mask_1d, None]   # solve for scale_factor(lambda) in obj_continuum ~ scale_factor * sky_continuum
+        coeffs, *_ = np.linalg.lstsq(design, obj_fit_cont[fit_mask_1d], rcond=None)   # low-sky signal has low-weight
+        scale = np.polynomial.legendre.legval(xn, coeffs).astype(np.float32)
 
         sky_cf_image_scaled = sky_cf_image * scale[None, :]
 
-        msg = '   - sky continuum: scaled by sky-bundle ratio (median={0:.4g}, {1} cols left unscaled)'.format(
-            np.median(scale[good]) if np.any(good) else float('nan'), int((~good).sum()))
+        msg = '   - sky continuum: scaled by sky-bundle fit (median={0:.4g})'.format(np.median(scale))
     elif cfg['enable']:
         msg = '   - sky continuum: too few valid sky-bundle fibers or fit failed; not scaled'
     else:
@@ -2083,7 +2084,6 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         med_sky = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
         med_sci[has_cols] = np.nanmedian(np.where(valid[:, has_cols], sci_frame_fibers[:, has_cols], np.nan), axis=0)
         med_sky[has_cols] = np.nanmedian(np.where(valid[:, has_cols], sky_frame_fibers[:, has_cols], np.nan), axis=0)
-        sci_cf_obj_mean = sci_cf_image[obj_bundle_mask].mean(axis=0)
         sky_cf_obj_mean_capped = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)   # reflects the ceiling applied above
         sky_continuum_unscaled_plot(work, sci_frame_fibers, sky_frame_fibers, med_sci, med_sky, sci_cf_obj_mean, sky_cf_obj_mean_capped)
 
@@ -2131,8 +2131,9 @@ def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw
     ax2.set_title('sky-bundle continuum fits', fontsize=15, pad=13)
 
     ax3.axhline(1.0, color='grey', lw=0.8, ls='--')
-    ax3.step(wave, scale, where='mid', color='black', lw=0.8)
+    ax3.step(wave, scale, where='mid', color='black', lw=0.8, label='minimized scale factor')
     ax3.set_ylabel('scale factor', fontsize=14, labelpad=15)
+    ax3.legend(fontsize=10, loc='upper right')
     ax3.set_title('sky-bundle derived scale factor (obj / sky)', fontsize=15, pad=13)
 
     ax4.step(wave, sky_cf_obj_mean, where='mid', color='grey', lw=1.0, label='unscaled')

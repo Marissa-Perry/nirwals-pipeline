@@ -255,12 +255,13 @@
         "n_iter": 3,
         "continuum": {
             "notes": [
-                "a. scales the sky continuum fit by the ratio of the object/sky sky-bundle continuum fits;",
-                "b. wherever either sky-bundle continuum fit is negative, the ratio is left unscaled (factor 1) instead;",
+                "a. fits scale_factor(wavelength) by least-squares, solving obj_continuum ~ scale_factor * sky_continuum over the sky-bundle's median continuum fits;",
+                "b. deg = degree of the Legendre polynomial scale_factor(wavelength) is expanded in;",
                 "c. min_sky_fibers = skip scaling if too few sky-bundle fibres have valid continuum"
             ],
-            "enable": 0,
-            "min_sky_fibers": 10
+            "enable": 1,
+            "min_sky_fibers": 10,
+            "deg": 3
         }
     },
 
