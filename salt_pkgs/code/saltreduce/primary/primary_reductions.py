@@ -100,7 +100,7 @@ def master_flat_name(obs_date, filename):
 
 def duplicate(path):
     """
-    Reject duplicate copies like '*Dark0013 2.fits' or '*copy.fits'.
+    Reject duplicate files
     """
     b = os.path.basename(path)
     return (' ' in b) or ('copy' in b.lower())
@@ -109,6 +109,8 @@ def duplicate(path):
 def group_frames(files, predicate, group_keys):
     groups = {}
     for f in files:
+        if duplicate(f):
+            continue
         with fits.open(f) as hdu:
             exptype = read_header_key(hdu, EXPTYPE)
             if not predicate(exptype):
@@ -239,6 +241,8 @@ def combine_flats(obs_date):
     files = sorted(glob.glob(os.path.join(rawdir, f'N{obs_date}*reduced.fits')))
     flat_files = []
     for f in files:
+        if duplicate(f):
+            continue
         with fits.open(f) as hdu:
             exptype = read_header_key(hdu, EXPTYPE)
         if is_flat(exptype):

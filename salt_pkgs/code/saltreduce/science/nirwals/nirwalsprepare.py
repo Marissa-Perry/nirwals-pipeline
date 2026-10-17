@@ -45,6 +45,7 @@ from ...functions import isolated_hot_pixels
 from ...functions import build_alpha_maps
 from ...functions import expected_dark_noise
 from ...functions import OVERFLOW_LIMIT
+from ...primary.primary_reductions import duplicate
 
 # ---------------------------------------------------------------------------- #
 
@@ -138,7 +139,7 @@ def generate_bpm(obs_date, log, **kwargs):
     prd_dir = os.path.join(work_dir, '{0}/product'.format(folder))
     # Get primary-reduced data files with wildcard in product data directory
     wildcard = '*{0}*reduced.fits'.format(obs_date)
-    data_files = sorted(glob.glob(os.path.join(prd_dir, wildcard)))
+    data_files = sorted(f for f in glob.glob(os.path.join(prd_dir, wildcard)) if not duplicate(f))
 
     # Set instrument work directory
     wrk_dir = kwargs['params']['wrk_dir']
@@ -168,7 +169,7 @@ def generate_bpm(obs_date, log, **kwargs):
         log.message('   - config set to skip BPM generation.')
 
         try:
-            bpm_file = glob.glob(os.path.join(prd_dir, f'*Bpm*{bpm_thresh_sigma}sigma.fits'))[0]
+            bpm_file = sorted(f for f in glob.glob(os.path.join(prd_dir, f'*Bpm*{bpm_thresh_sigma}sigma.fits')) if not duplicate(f))[0]
             log.message('   - using file {0}'.format(bpm_file), with_header=False)
 
             with fits.open(bpm_file) as hdul:
@@ -210,13 +211,13 @@ def generate_bpm(obs_date, log, **kwargs):
         # dark product paths only, for bookkeeping -- their SCI data isn't read here since the
         # per-file correction loop below overwrites it in place on every run
         dark_wildcard = os.path.join(prd_dir, '{0}{1}Dark*.fits'.format(prefix, obs_date))
-        dark_files = sorted(glob.glob(dark_wildcard))
+        dark_files = sorted(f for f in glob.glob(dark_wildcard) if not duplicate(f))
         if len(dark_files) == 0:
             raise RuntimeError(f'No combined dark files found for {obs_date}')
         product_file_by_exptime = {fits.getheader(f, PRIMARY)['EXPTIME']: f for f in dark_files}
 
         flat_wildcard = os.path.join(prd_dir, '{0}{1}Flat*.fits'.format(prefix, obs_date))
-        flat_files = sorted(glob.glob(flat_wildcard))
+        flat_files = sorted(f for f in glob.glob(flat_wildcard) if not duplicate(f))
         if len(flat_files) == 0:
             raise RuntimeError(f'No combined flat files found for {obs_date}')
 
@@ -254,7 +255,7 @@ def generate_bpm(obs_date, log, **kwargs):
         # *Dark*.fits files get IPC-corrected in place later in this function, so a second run
         # can't use them as calibration input without compounding that correction
         raw_wildcard = os.path.join(work_dir, '{0}/raw'.format(folder), '*reduced.fits')
-        raw_files = sorted(glob.glob(raw_wildcard))
+        raw_files = sorted(f for f in glob.glob(raw_wildcard) if not duplicate(f))
         dark_groups = {}
         for raw_file in raw_files:
             hdr = fits.getheader(raw_file, PRIMARY)
@@ -438,7 +439,7 @@ def generate_bpm(obs_date, log, **kwargs):
 
     # Get all fits file(s) in product data directory
     wildcard = '*{0}*.fits'.format(obs_date)
-    prd_files = sorted(glob.glob(os.path.join(prd_dir, wildcard)))
+    prd_files = sorted(f for f in glob.glob(os.path.join(prd_dir, wildcard)) if not duplicate(f))
     for prd_file in prd_files:
         basename = os.path.basename(prd_file)
         try:
@@ -635,7 +636,7 @@ def prepare_flat_fit(obs_date, log, **kwargs):
     prd_dir = os.path.join(work_dir, '{0}/product'.format(folder))
     # Get combined flat field file(s) with wildcard in product data directory
     wildcard = '{0}{1}Flat*.fits'.format(prefix, obs_date)
-    flat_files = sorted(glob.glob(os.path.join(prd_dir, wildcard)))
+    flat_files = sorted(f for f in glob.glob(os.path.join(prd_dir, wildcard)) if not duplicate(f))
 
     # Add message to log
     msg = '{0} -- Prepare flat field continuum fit:\n'
@@ -779,7 +780,7 @@ def prepare_fibres_config(obs_date, log, **kwargs):
     prd_dir = os.path.join(work_dir, '{0}/product'.format(folder))
     # Get combined flat field file(s) with wildcard in product data directory
     wildcard = '{0}{1}Flat*.fits'.format(prefix, obs_date)
-    flat_files = sorted(glob.glob(os.path.join(prd_dir, wildcard)))
+    flat_files = sorted(f for f in glob.glob(os.path.join(prd_dir, wildcard)) if not duplicate(f))
 
     # Add message to log
     msg = '{0} -- Prepare fibre config entries:\n'
