@@ -51,6 +51,7 @@ class Fit1D:
         self.y_orig = y
         self.npts = len(self.x_orig)
         self.debug = debug
+        self._has_yerr = yerr is not None   # real errors given -- weight the fit and track its covariance
 
         if yerr is None:
             self.yerr_orig = np.ones(self.npts)
@@ -148,15 +149,18 @@ class Fit1D:
     def fit(self, task=0, s=None, t=None):
         """Fit the function to the data"""
 
-        # Use Linear Least Square fitter
-        fitter = LinearLSQFitter()
+        # Use Linear Least Square fitter -- weighted, with covariance, only if real yerr was given
+        fitter = LinearLSQFitter(calc_uncertainties=self._has_yerr)
 
         # Do iterations
         for i in range(self.niter):
 
+            # self.yerr is re-sliced alongside self.x/self.y below, so recompute weights each pass
+            weights = (1.0 / self.yerr**2) if self._has_yerr else None
+
             try:
                 # Do linear least squares fit
-                self.func = fitter(self.func, self.x, self.y)
+                self.func = fitter(self.func, self.x, self.y, weights=weights)
 
             except Exception as error:
                 # Check if at least 1 iteration was completed
@@ -170,7 +174,7 @@ class Fit1D:
             if self.coef.tolist() == self.func.parameters.tolist(): break
 
             self.set_mask()
-            self.set_arrays(self.x, self.y)
+            self.set_arrays(self.x, self.y, err=self.yerr if self._has_yerr else None)
             # Update coefficients
             self.coef = self.func.parameters
 
@@ -180,6 +184,16 @@ class Fit1D:
         """Return the value of the function evaluated at x"""
 
         return self.func(x)
+
+    def err_at(self, x):
+        """Per-x 1-sigma uncertainty on the fit curve, propagated from the fit's covariance matrix (None if yerr was not supplied)"""
+
+        if not self._has_yerr:
+            return None
+
+        basis = np.array(self.func.fit_deriv(x, *self.func.parameters))   # (len(x), n_params), linear model
+        cov = self.func.cov_matrix.cov_matrix
+        return np.sqrt(np.einsum('ij,jk,ik->i', basis, cov, basis))
 
 # ---------------------------------------------------------------------------- #
 class CurFit:
