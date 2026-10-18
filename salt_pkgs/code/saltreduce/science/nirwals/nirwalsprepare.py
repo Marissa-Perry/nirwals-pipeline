@@ -160,8 +160,8 @@ def generate_bpm(obs_date, log, **kwargs):
 
     # set once the BPM is generated below, for the correction loop further down
     correct_neighbors = False
-    alpha_row = None
-    alpha_col = None
+    alpha_asym_3 = None
+    alpha_asym_1 = None
     measured = None
 
     # check if BPM generation was overrided for this observation night and retrieve BPM in prd dir
@@ -308,8 +308,8 @@ def generate_bpm(obs_date, log, **kwargs):
 
         # ---------- component 4: inter-pixel crosstalk correction ----------
         correct_neighbors = config['bpm'].get('crosstalk', {}).get('correct_neighbors', {}).get('apply', True)
-        alpha_row = config['bpm']['crosstalk']['correct_neighbors']['alpha_row']
-        alpha_col = config['bpm']['crosstalk']['correct_neighbors']['alpha_col']
+        alpha_asym_3 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_3']
+        alpha_asym_1 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_1']
         if correct_neighbors:
             measured = np.zeros(bpm.shape, dtype=bool)
             isolation_radius = config['bpm']['crosstalk'].get('isolation_radius', 5)
@@ -320,11 +320,11 @@ def generate_bpm(obs_date, log, **kwargs):
                 min_measured = per_pixel_cfg.get('min_measured', 200)
                 alpha_threshold = longest_dark_med + alpha_sigma * longest_dark_sig
                 _, alpha_candidates = isolated_hot_pixels(longest_dark_data, alpha_threshold, radius=isolation_radius)
-                alpha_row, alpha_col, measured, used_row, used_col = build_alpha_maps(
-                    longest_dark_data, longest_dark_med, alpha_candidates, alpha_row, alpha_col, min_measured=min_measured)
+                alpha_asym_3, alpha_asym_1, alpha_sym, measured, used_asym_3, used_asym_1 = build_alpha_maps(
+                    longest_dark_data, longest_dark_med, alpha_candidates, alpha_asym_3, alpha_asym_1, min_measured=min_measured)
                 source = 'self-calibrated' if measured.sum() >= min_measured else 'config fallback'
-                log.message('   - crosstalk: {0} pixels given individually measured row/col alpha; default alpha_row={1:.4f}, alpha_col={2:.4f} ({3}sigma isolated hot pixels, {4}-pixel isolation radius, {5})'.format(
-                    measured.sum(), used_row, used_col, alpha_sigma, isolation_radius, source), with_header=False)
+                log.message('   - crosstalk: {0} pixels given individually measured alpha; default alpha_asym_3={1:.4f}, alpha_asym_1={2:.4f} ({3}sigma isolated hot pixels, {4}-pixel isolation radius, {5})'.format(
+                    measured.sum(), used_asym_3, used_asym_1, alpha_sigma, isolation_radius, source), with_header=False)
 
                 # expected noise on the dark's background level, for the calibration diagnostic plot
                 reduce_config_file = os.path.join(kwargs['config_dir'], 'nirwals', 'science_reduce.json')
@@ -336,7 +336,7 @@ def generate_bpm(obs_date, log, **kwargs):
                 background_noise = expected_dark_noise(longest_dark_med, longest_exptime, longest_n_frames, gain, read_noise_e)
 
                 alpha_calibration_diagnostic_plot(longest_dark_data, longest_dark_med, longest_dark_sig, bpm_thresh_sigma,
-                                                   alpha_row, alpha_col, measured, used_row, used_col, background_noise, longest_exptime, bpm_dir)
+                                                   alpha_asym_3, alpha_asym_1, alpha_sym, measured, used_asym_3, used_asym_1, background_noise, longest_exptime, bpm_dir)
 
         # ---------- diagnostic: longest-exposure master dark only ----------
         if plot_dark is not None:
@@ -450,7 +450,7 @@ def generate_bpm(obs_date, log, **kwargs):
                 # correct IPC crosstalk across this file's own SCI data; BPM-flagged pixels can't leak into their neighbors
                 if correct_neighbors and SCI in hdu_names:
                     before = hdul[SCI].data
-                    after = ipc_correction_global(before, alpha_row, alpha_col, bad=(bpm == 1), trusted_source=measured)
+                    after = ipc_correction_global(before, alpha_asym_3, alpha_asym_1, bad=(bpm == 1), trusted_source=measured)
                     hdul[SCI].data = after
                     if prd_file == longest_dark_file:
                         ipc_correction_diagnostic_plot(before, after, bpm, measured, longest_dark_med, longest_exptime, bpm_dir)
@@ -498,14 +498,8 @@ def generate_bpm(obs_date, log, **kwargs):
     return
 
 # ---------------------------------------------------------------------------- #
-def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, exptime, bpm_dir, zoom_centre=(330, 1426), zoom_size=60):
+def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, exptime, bpm_dir, zoom_centre=(300, 1340), zoom_size=80):
 # ---------------------------------------------------------------------------- #
-    '''
-    Raw, raw-minus-background, corrected, and corrected-minus-background views of a region of
-    the longest-exposure master dark, arranged 2x2. Masked pixels are shaded out, in whichever
-    of black/white reads least like real data on that panel's colormap; pixels with their own
-    measured alpha get a circle drawn over them.
-    '''
     rows, cols = before.shape
     cx, cy = zoom_centre
     half = zoom_size // 2
@@ -515,28 +509,25 @@ def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, ex
     after = after[r0:r1, c0:c1]
     bpm = bpm[r0:r1, c0:c1]
     measured = measured[r0:r1, c0:c1]
-    extent = [c0, c1, r0, r1]   # keeps the real column/row numbers on the plot axes
-
-    raw_residual = before - median_dark   # each pixel's excess over the frame's own dark-current background
+    extent = [c0, c1, r0, r1]
+    # compute each pixel's excess over the frame's own dark-current background
+    raw_residual = before - median_dark 
     residual = after - median_dark
 
     good = bpm == 0
     vmin, vmax = np.nanpercentile(before[good], [1, 99])
-    rlim = max(np.nanpercentile(np.abs(raw_residual[good]), 99), np.nanpercentile(np.abs(residual[good]), 99))   # shared scale so before/after are directly comparable
-
-    # one overlay per masking color, transparent (alpha=0) everywhere a pixel isn't masked
-    overlay_black = np.zeros((*before.shape, 4))
-    overlay_black[bpm == 1] = [0, 0, 0, 1]
-    overlay_white = np.zeros((*before.shape, 4))
-    overlay_white[bpm == 1] = [1, 1, 1, 1]
-    # pixel centres of the individually-measured ones, for the circle markers below
+    # shared scale for before and after correction
+    rlim = max(np.nanpercentile(np.abs(raw_residual[good]), 99), np.nanpercentile(np.abs(residual[good]), 99))
+    bpm_overlay = np.zeros((*before.shape, 4))
+    bpm_overlay[bpm == 1] = [0, 0, 0, 1]
+    # individually-measured pixels
     circle_rows, circle_cols = np.where(measured)
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-    panels = [(before, 'raw', 'gray', vmin, vmax, overlay_black),
-              (raw_residual, r'raw $-$ background', 'berlin', -rlim, rlim, overlay_black),
-              (after, 'corrected', 'gray', vmin, vmax, overlay_black),
-              (residual, r'corrected $-$ background', 'berlin', -rlim, rlim, overlay_black)]
+    panels = [(before, 'raw', 'gray', vmin, vmax, bpm_overlay),
+              (raw_residual, r'raw $-$ background', 'berlin', -rlim, rlim, bpm_overlay),
+              (after, 'corrected', 'gray', vmin, vmax, bpm_overlay),
+              (residual, r'corrected $-$ background', 'berlin', -rlim, rlim, bpm_overlay)]
     for ax, (data, title, cmap, lo, hi, overlay) in zip(axes.flat, panels):
         im = ax.imshow(data, origin='lower', cmap=cmap, vmin=lo, vmax=hi, extent=extent)
         ax.imshow(overlay, origin='lower', extent=extent)
@@ -553,62 +544,56 @@ def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, ex
     plt.close()
 
 # ---------------------------------------------------------------------------- #
-def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_row_map, alpha_col_map,
-                                       measured, used_row, used_col, background_noise, exptime, bpm_dir):
+def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_asym_3_map, alpha_asym_1_map,
+                                       alpha_sym_map, measured, used_asym_3, used_asym_1, background_noise, exptime, bpm_dir):
 # ---------------------------------------------------------------------------- #
-    '''
-    Scatter of alpha_row/alpha_col against pixel brightness for every individually-measured
-    isolated hot pixel, with a marginal histogram of the same values. Shows the row/col alpha
-    actually applied this run (which may differ from this night's own measured median when too
-    few pixels were measured to trust it) and the expected shot+read noise band around the
-    dark's own background level.
-    '''
     central_values = dark[measured] - med
-    row_values = alpha_row_map[measured]
-    col_values = alpha_col_map[measured]
-    combined_values = (row_values + col_values) / 2
+    asym_3_values = alpha_asym_3_map[measured]
+    asym_1_values = alpha_asym_1_map[measured]
+    sym_values = alpha_sym_map[measured]   # alpha_sym: equal-weighted mean of all 4 neighbors, for comparison against alpha_asym_3/alpha_asym_1
+
+    asym_3_lo, asym_3_hi = np.percentile(asym_3_values, [16, 84])
+    asym_1_lo, asym_1_hi = np.percentile(asym_1_values, [16, 84])
+    sym_lo, sym_hi = np.percentile(sym_values, [16, 84])
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 5), sharey=True, gridspec_kw={'width_ratios': [3, 1], 'wspace': 0})
 
     ax1.axvline(med, color='grey', ls='dotted', lw=1.2)
     ax1.axvspan(med - background_noise, med + background_noise, color='grey', alpha=0.2)
-    ax1.text(med + 0.005, 0.043, 'dark-current\nbackground', color='grey', ha='center', fontsize=14)
+    ax1.text(med + 0.005, 0.065, 'dark-current\nbackground', color='grey', ha='center', fontsize=14)
 
-    # combined (row+col averaged) alpha, shown as grey background context
-    ax1.scatter(central_values, combined_values, s=8, alpha=0.1, color='#9a8c98')
-    ax1.axhline(np.median(combined_values), color='#9a8c98', ls='--', lw=1.2, zorder=4)
+    # 16th-84th percentile spread of each measured distribution
+    ax1.axhspan(sym_lo, sym_hi, color='#9a8c98', alpha=0.1)
+    ax1.axhspan(asym_3_lo, asym_3_hi, color='#FD8721', alpha=0.1)
+    ax1.axhspan(asym_1_lo, asym_1_hi, color='#577562', alpha=0.1)
 
-    # row and column alpha, highlighted in the foreground -- median lines use what was actually
-    # applied (used_row/used_col), since that can differ from this night's own measured median
-    # whenever too few pixels were measured and the config fallback was used instead
-    ax1.scatter(central_values, row_values, s=8, alpha=0.15, color='#fec89a')
-    ax1.scatter(central_values, col_values, s=8, alpha=0.15, color='#B9CBC0')
-    ax1.axhline(used_row, color='#FD8721', ls='--', lw=1.2, zorder=5)
-    ax1.axhline(used_col, color='#577562', ls='--', lw=1.2, zorder=6)
-
+    ax1.scatter(central_values, sym_values, s=8, alpha=0.1, color='#9a8c98')
+    ax1.axhline(np.median(sym_values), color='#9a8c98', ls='--', lw=1.2, zorder=4)
+    ax1.scatter(central_values, asym_3_values, s=8, alpha=0.15, color='#fec89a')
+    ax1.scatter(central_values, asym_1_values, s=8, alpha=0.15, color='#B9CBC0')
+    # used_asym_3/used_asym_1 are what's actually applied this run -- may be the config fallback, not this frame's own median
+    ax1.axhline(used_asym_3, color='#FD8721', ls='--', lw=1.2, zorder=5)
+    ax1.axhline(used_asym_1, color='#577562', ls='--', lw=1.2, zorder=6)
     ax1.axvline(med + bpm_thresh_sigma * sig, color='black', lw=1.2)
-    ax1.text(med + bpm_thresh_sigma * sig + 0.3, 0.043, fr'{bpm_thresh_sigma}$\sigma$'+'\n'+'hot pixel', color='black', ha='center', fontsize=14)
-
+    ax1.text(med + bpm_thresh_sigma * sig + 0.3, 0.065, fr'{bpm_thresh_sigma}$\sigma$'+'\n'+'hot pixel', color='black', ha='center', fontsize=14)
     ax1.set_xscale('log')
     ax1.set_xlabel('pixel value [counts/s]', fontsize=16, labelpad=15)
     ax1.set_ylabel(r'$\alpha$', fontsize=20, labelpad=15)
-    ax1.grid(axis='y', color='grey', alpha=0.15)
-    ax1.set_ylim(-0.0001, 0.04)
+    ax1.set_ylim(-0.0001, 0.06)
     ax1.tick_params(labelsize=14)
 
-    # right panel: how alpha is distributed, sharing the same y-axis as the scatter -- median
-    # labels live here instead of on the scatter, next to the distribution they describe
-    bins = np.linspace(-0.005, 0.05, 100)
-    combined_counts, _, _ = ax2.hist(combined_values, bins=bins, orientation='horizontal', color='#9a8c98', alpha=0.5)
-    row_counts, _, _ = ax2.hist(row_values, bins=bins, orientation='horizontal', color='#fec89a', alpha=0.5)
-    col_counts, _, _ = ax2.hist(col_values, bins=bins, orientation='horizontal', color='#B9CBC0', alpha=0.5)
-    ax2.axhline(np.median(combined_values), color='#9a8c98', ls='--', lw=1.2)
-    ax2.axhline(used_row, color='#FD8721', ls='--', lw=1.2)
-    ax2.axhline(used_col, color='#577562', ls='--', lw=1.2)
-    text_x_pos = max(combined_counts.max(), row_counts.max(), col_counts.max()) * 1.10   # 10% buffer
-    ax2.text(text_x_pos, used_row, fr'$\alpha_{{\rm row}}={used_row:.3f}$', color='#FD8721', fontsize=12)
-    ax2.text(text_x_pos, used_col, fr' $\alpha_{{\rm col}}={used_col:.3f}$', color='#577562', fontsize=12)
-    ax2.text(text_x_pos, np.median(combined_values), fr'$\alpha={np.median(combined_values):.3f}$', color='#9a8c98', fontsize=12)
+    # right panel: alpha distribution
+    bins = np.linspace(-0.005, 0.08, 100)
+    sym_counts, _, _ = ax2.hist(sym_values, bins=bins, orientation='horizontal', color='#9a8c98', alpha=0.5)
+    asym_3_counts, _, _ = ax2.hist(asym_3_values, bins=bins, orientation='horizontal', color='#fec89a', alpha=0.5)
+    asym_1_counts, _, _ = ax2.hist(asym_1_values, bins=bins, orientation='horizontal', color='#B9CBC0', alpha=0.5)
+    ax2.axhline(np.median(sym_values), color='#9a8c98', ls='--', lw=1.2)
+    ax2.axhline(used_asym_3, color='#FD8721', ls='--', lw=1.2)
+    ax2.axhline(used_asym_1, color='#577562', ls='--', lw=1.2)
+    text_x_pos = max(sym_counts.max(), asym_3_counts.max(), asym_1_counts.max()) * 1.10   # 10% buffer
+    ax2.text(text_x_pos, used_asym_3, fr'$\alpha_{{\rm asym,3}}={used_asym_3:.3f}$', color='#FD8721', fontsize=12)
+    ax2.text(text_x_pos, used_asym_1, fr' $\alpha_{{\rm asym,1}}={used_asym_1:.3f}$', color='#577562', fontsize=12)
+    ax2.text(text_x_pos, np.median(sym_values), fr'$\alpha_{{\rm sym}}={np.median(sym_values):.3f}$', color='#9a8c98', fontsize=12)
     ax2.set_xlabel('# of pixels', fontsize=16, labelpad=15)
     plt.setp(ax2.get_yticklabels(), visible=False)
     ax2.tick_params(labelsize=14)
