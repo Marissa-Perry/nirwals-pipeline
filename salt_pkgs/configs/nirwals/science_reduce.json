@@ -255,13 +255,17 @@
         "n_iter": 3,
         "continuum": {
             "notes": [
-                "a. fits scale_factor(wavelength) by least-squares, solving obj_continuum ~ scale_factor * sky_continuum over the sky-bundle's median continuum fits;",
-                "b. deg = degree of the Legendre polynomial scale_factor(wavelength) is expanded in;",
-                "c. min_sky_fibers = skip scaling if too few sky-bundle fibres have valid continuum"
+                "a. each object-bundle fiber's own sky-frame continuum is adjusted, never replaced, using a single per-wavelength correction derived from the sky-bundle's median continuum fits (science exposure vs dedicated sky exposure);",
+                "b. method = 'ratio': sky_cf_image * obj_continuum/sky_continuum -- cancels sky-bundle/object-bundle illumination mismatch exactly, but unstable if sky_continuum crosses zero;",
+                "c. method = 'additive': sky_cf_image + (obj_continuum - sky_continuum) -- stable everywhere, but biased by illumination mismatch whenever the sky continuum genuinely changed between exposures;",
+                "d. min_sky_fibers = skip scaling if too few sky-bundle fibres have valid continuum;",
+                "e. skip_for_objects = OBJECT name prefixes (case-insensitive) to always skip scaling for -- leaked starlight in the sky-bundle would inflate the ratio with stellar flux, not real sky;",
+                "f. columns outside the sky-bundle's own valid wavelength range are left unscaled -- the continuum fit extrapolates there, not real sky"
             ],
             "enable": 1,
+            "method": "ratio",
             "min_sky_fibers": 10,
-            "deg": 3
+            "skip_for_objects": ["HIP", "HD"]
         }
     },
 
@@ -304,7 +308,7 @@
 
     "w_mod": {"min": 0.0, "max": 0.0, "tol": 15.0}, "w_rms_tol": {"min": 0.0001, "max": 0.75}, "z_rms_tol": {"min": 0.0001, "max": 0.75},
 
-    "obs_date": "", "exp_type": "", "recalc": 0, "raw_prefix": "",
+    "obs_date": "", "exp_type": "", "recalc": 1, "raw_prefix": "",
 
     "arc": {},
     "science": {},
