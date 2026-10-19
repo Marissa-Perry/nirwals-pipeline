@@ -2139,15 +2139,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         ceiling_frac = (sky_cf_image_scaled > sci_cf_image)[obj_bundle_mask].mean(axis=0)
         floor_frac_arr = (sky_cf_image_scaled < 0)[obj_bundle_mask].mean(axis=0)
 
-        msg = ('   - sky continuum: scaled by sky-bundle {0} (mean ceiling-clip={1:.1%}, mean floor-clip={2:.1%}, '
-               '{3} cols outside sky-bundle fit range left unscaled)'
-               ).format(method, ceiling_frac.mean(), floor_frac_arr.mean(), int((~in_fit_range).sum()))
+        msg = ('   - sky continuum: scaled by sky-bundle {0}').format(method, ceiling_frac.mean(), floor_frac_arr.mean(), int((~in_fit_range).sum()))
     elif is_bright_standard:
-        msg = '   - sky continuum: scaling skipped for bright calibration standard ({0}); using unscaled sky continuum'.format(trg_name)
+        msg = '   - sky continuum: scaling skipped for bright calibration standard ({0}). No scaling applied'.format(trg_name)
     elif cfg['enable']:
-        msg = '   - sky continuum: too few valid sky-bundle fibers or fit failed; not scaled'
+        msg = '   - sky continuum: too few valid sky-bundle fibers or fit failed. No scaling applied'
     else:
-        msg = '   - sky continuum: scaling disabled (enable=0); using unscaled sky continuum'
+        msg = '   - sky continuum: scaling disabled (enable=0). No scaling applied'
     log.message(msg, with_header=False)
 
     # the sky continuum subtracted off can never exceed the science frame's own continuum, nor be negative
