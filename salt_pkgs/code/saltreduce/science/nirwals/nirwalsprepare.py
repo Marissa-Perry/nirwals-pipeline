@@ -44,7 +44,6 @@ from ...functions import ipc_correction_global
 from ...functions import isolated_hot_pixels
 from ...functions import build_alpha_maps
 from ...functions import expected_dark_noise
-from ...functions import OVERFLOW_LIMIT
 from ...primary.primary_reductions import duplicate
 
 # ---------------------------------------------------------------------------- #
@@ -307,6 +306,7 @@ def generate_bpm(obs_date, log, **kwargs):
         bpm[bpm_dark] = 1.
 
         # ---------- component 4: inter-pixel crosstalk correction ----------
+        log.message('   - crosstalk:', with_header=False)
         correct_neighbors = config['bpm'].get('crosstalk', {}).get('correct_neighbors', {}).get('apply', True)
         alpha_asym_3 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_3']
         alpha_asym_1 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_1']
@@ -316,16 +316,15 @@ def generate_bpm(obs_date, log, **kwargs):
             # a pixel's own alpha is measured only where it's an isolated hot pixel -- the default alpha covers everywhere else
             per_pixel_cfg = config['bpm']['crosstalk']['correct_neighbors'].get('per_pixel_alpha', {})
             if per_pixel_cfg.get('apply', True):
-                alpha_sigma = per_pixel_cfg['sigma']
-                min_measured = per_pixel_cfg.get('min_measured', 200)
-                alpha_threshold = longest_dark_med + alpha_sigma * longest_dark_sig
+                min_measured = per_pixel_cfg['min_measured']
+                # isolated hot pixels for calibration are flagged at the same threshold as the BPM's own dark-current component
+                alpha_threshold = longest_dark_med + bpm_thresh_sigma * longest_dark_sig
                 _, alpha_candidates = isolated_hot_pixels(longest_dark_data, alpha_threshold, radius=isolation_radius)
-                alpha_asym_3, alpha_asym_1, alpha_sym, measured, used_asym_3, used_asym_1 = build_alpha_maps(
-                    longest_dark_data, longest_dark_med, alpha_candidates, alpha_asym_3, alpha_asym_1, min_measured=min_measured)
-                source = 'self-calibrated' if measured.sum() >= min_measured else 'config fallback'
-                log.message('   - crosstalk: {0} pixels given individually measured alpha; default alpha_asym_3={1:.4f}, alpha_asym_1={2:.4f} ({3}sigma isolated hot pixels, {4}-pixel isolation radius, {5})'.format(
-                    measured.sum(), used_asym_3, used_asym_1, alpha_sigma, isolation_radius, source), with_header=False)
-
+                alpha_asym_3, alpha_asym_1, alpha_sym, measured, used_asym_3, used_asym_1 = build_alpha_maps(longest_dark_data, longest_dark_med, alpha_candidates, alpha_asym_3, alpha_asym_1, min_measured=min_measured)
+                if measured.sum() >= min_measured:
+                    log.message('      - measured alpha for {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius): alpha_asym_3={3:.4f}, alpha_asym_1={4:.4f}'.format(measured.sum(), bpm_thresh_sigma, isolation_radius, used_asym_3, used_asym_1), with_header=False)
+                else:
+                    log.message('      - {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius) below config threshold of >{3} pixels. Using default config values alpha_asym_3={4:.4f}, alpha_asym_1={5:.4f}'.format(measured.sum(), bpm_thresh_sigma, isolation_radius, min_measured, used_asym_3, used_asym_1), with_header=False)
                 # expected noise on the dark's background level, for the calibration diagnostic plot
                 reduce_config_file = os.path.join(kwargs['config_dir'], 'nirwals', 'science_reduce.json')
                 reduce_config = load_json_file(reduce_config_file, raise_error=True)
@@ -447,10 +446,10 @@ def generate_bpm(obs_date, log, **kwargs):
             with fits.open(prd_file, mode='update') as hdul:
                 # ------- add "BPM" hdu -------
                 hdu_names = [hdu.name for hdu in hdul]
-                # correct IPC crosstalk across this file's own SCI data; BPM-flagged pixels can't leak into their neighbors
+                # correct IPC crosstalk across this file's own SCI data; BPM-flagged pixels can't leak into their neighbors unless individually measured
                 if correct_neighbors and SCI in hdu_names:
                     before = hdul[SCI].data
-                    after = ipc_correction_global(before, alpha_asym_3, alpha_asym_1, bad=(bpm == 1), trusted_source=measured)
+                    after = ipc_correction_global(before, alpha_asym_3, alpha_asym_1, bpm=(bpm == 1), calibrated_pixel=measured)
                     hdul[SCI].data = after
                     if prd_file == longest_dark_file:
                         ipc_correction_diagnostic_plot(before, after, bpm, measured, longest_dark_med, longest_exptime, bpm_dir)
@@ -725,8 +724,7 @@ def fit_continuum(image, config):
             # Move on!
             continue
 
-        # exclude corrupted/overflow pixels so one bad value can't break the whole row's fit
-        valid = cm & (np.abs(f) < OVERFLOW_LIMIT)
+        valid = cm
 
         # too little real signal for this polynomial order (e.g. an unilluminated edge row) -- leave continuum at 0
         if np.count_nonzero(f[valid]) <= 2 * continuum_fit['order']:

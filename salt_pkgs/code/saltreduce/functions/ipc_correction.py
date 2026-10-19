@@ -2,8 +2,6 @@ import numpy as np
 from scipy.ndimage import convolve
 
 
-OVERFLOW_LIMIT = 1e4   # counts/s; same cutoff experiment_bpm.ipynb uses to exclude corrupted/overflow pixels
-
 # 0-indexed right edge of each 64-column amplifier readout region (fixed detector hardware property)
 AMP_BOUNDARIES = np.array([64., 128., 192., 256., 320., 384., 448., 512., 576., 640., 704., 768.,
                             832., 896., 960., 1024., 1088., 1152., 1216., 1280., 1344., 1408.,
@@ -18,7 +16,7 @@ def amp_reads_left_to_right(n_cols):
     return (amp_index % 2) == 1   # bright amp-boundary convention (readout directions point toward each other) -> odd amp index reads left-to-right
 
 
-def ipc_correction_global(image, alpha_asym_3, alpha_asym_1, bad=None, trusted_source=None):
+def ipc_correction_global(image, alpha_asym_3, alpha_asym_1, bpm=None, calibrated_pixel=None):
     '''
     Approximate first-order inverse of the 4-neighbor IPC kernel, applied to every pixel.
     '''
@@ -29,15 +27,12 @@ def ipc_correction_global(image, alpha_asym_3, alpha_asym_1, bad=None, trusted_s
     alpha_toward_left = np.where(l_to_r, alpha_asym_1, alpha_asym_3)
     alpha_toward_right = np.where(l_to_r, alpha_asym_3, alpha_asym_1)
 
-    overflow_ok = np.isfinite(image) & (np.abs(image) < OVERFLOW_LIMIT)
-    good = overflow_ok.copy()
-    if bad is not None:
-        good &= ~bad
-    source_ok = good.copy()
-    if trusted_source is not None:
-        source_ok |= (trusted_source & overflow_ok)   # trusted: value still known well enough to leak, even though flagged bad
-    source = np.where(source_ok, image, 0.0)   # an untrusted pixel can't leak a value onto its neighbors
-    source_alpha_col = np.where(source_ok, alpha_asym_3, 0.0)   # an untrusted pixel's own coupling strength can't leak either
+    gpm = np.ones(image.shape, dtype=bool) if bpm is None else ~bpm   # bad pixels don't get corrected themselves
+    source_ok = gpm.copy()
+    if calibrated_pixel is not None:
+        source_ok |= calibrated_pixel   # a bad-but-individually-measured hot pixel's real value still leaks onto its neighbors
+    source = np.where(source_ok, image, 0.0)   # a bad, uncalibrated pixel can't leak a value onto its neighbors
+    source_alpha_col = np.where(source_ok, alpha_asym_3, 0.0)   # a bad, uncalibrated pixel's own coupling strength can't leak either
     source_alpha_left = np.where(source_ok, alpha_toward_left, 0.0)
     source_alpha_right = np.where(source_ok, alpha_toward_right, 0.0)
     neighbor_sum = np.zeros_like(image, dtype=float)
@@ -46,7 +41,7 @@ def ipc_correction_global(image, alpha_asym_3, alpha_asym_1, bad=None, trusted_s
     neighbor_sum[:, 1:] += source_alpha_right[:, :-1] * source[:, :-1]    # from the pixel to the left, leaking rightward into this one
     neighbor_sum[:, :-1] += source_alpha_left[:, 1:] * source[:, 1:]    # from the pixel to the right, leaking leftward into this one
     corrected = image + (alpha_toward_left + alpha_toward_right + 2 * alpha_asym_3) * image - neighbor_sum
-    return np.where(good, corrected, image)   # bad pixels keep their original value
+    return np.where(gpm, corrected, image)   # bad pixels keep their original value
 
 
 def isolated_hot_pixels(data, threshold, radius=5):
@@ -57,11 +52,10 @@ def isolated_hot_pixels(data, threshold, radius=5):
     return hot_pixel, hot_pixel & (nearby == 1)
 
 
-def build_alpha_maps(dark, med, candidates, fallback_alpha_asym_3, fallback_alpha_asym_1, min_measured=200):
+def build_alpha_maps(dark, med, candidates, fallback_alpha_asym_3, fallback_alpha_asym_1, min_measured=100):
     '''
     Per-pixel alpha_asym_3, alpha_asym_1, and a diagnostic alpha_sym, measured from isolated hot pixels in dark.
     '''
-    clean = np.where(np.abs(dark) < OVERFLOW_LIMIT, dark, np.nan)
     l_to_r = amp_reads_left_to_right(dark.shape[1])
     all_asym_3_ests, all_asym_1_ests = [], []   # every candidate's raw estimate, for the frame-median fallback below
     coords, asym_3_ests, asym_1_ests, sym_ests = [], [], [], []   # ones that pass coupling limits, for per-pixel assignment
@@ -70,7 +64,7 @@ def build_alpha_maps(dark, med, candidates, fallback_alpha_asym_3, fallback_alph
             continue   # skip pixels at the detector edge
         if not (l_to_r[c - 1] == l_to_r[c] == l_to_r[c + 1]):
             continue   # within an amplifier boundary "read first" isn't meaningful
-        patch = clean[r-1:r+2, c-1:c+2] - med
+        patch = dark[r-1:r+2, c-1:c+2] - med
         central = patch[1, 1]
         left_val, right_val, up_val, down_val = patch[1, 0], patch[1, 2], patch[0, 1], patch[2, 1]
         if not np.isfinite(central) or central <= 0 or not np.all(np.isfinite([left_val, right_val, up_val, down_val])):
@@ -99,7 +93,8 @@ def build_alpha_maps(dark, med, candidates, fallback_alpha_asym_3, fallback_alph
 
     alpha_asym_3_map = np.full(dark.shape, default_alpha_asym_3, dtype=float)
     alpha_asym_1_map = np.full(dark.shape, default_alpha_asym_1, dtype=float)
-    alpha_sym_map = np.full(dark.shape, np.median(sym_ests) if sym_ests else fallback_alpha_asym_3, dtype=float)   # diagnostic only, never fed into the correction
+    # diagnostic plot comparing asymmetric correction (used in reduction) and a symmetric correction
+    alpha_sym_map = np.full(dark.shape, np.median(sym_ests) if sym_ests else fallback_alpha_asym_3, dtype=float)
     measured = np.zeros(dark.shape, dtype=bool)   # these pixels can still act as leak sources even where otherwise masked out
     for (r, c), asym_3_est, asym_1_est, sym_est in zip(coords, asym_3_ests, asym_1_ests, sym_ests):
         alpha_asym_3_map[r, c] = asym_3_est

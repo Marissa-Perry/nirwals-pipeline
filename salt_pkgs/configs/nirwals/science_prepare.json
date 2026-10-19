@@ -30,9 +30,9 @@
         "notes": [
             "a. If true, will generate BPM from master flat, master darks, and pixels flagged during up-the-ramp sampling.",
             "b. dark/flat deviant pixels (>= threshold.sigma) are already masked above, independent of crosstalk;",
-            "c. crosstalk.correct_neighbors: deconvolves the alpha_row/alpha_col IPC leakage across every pixel, excluding BPM-flagged pixels as sources; setting alpha_row == alpha_col gives the old uniform-coupling behavior;",
-            "d. crosstalk.correct_neighbors.per_pixel_alpha: uses each isolated hot pixel's own measured alpha_row/alpha_col where available; everywhere else gets that night's own median measured alpha_row/alpha_col, falling back to the alpha_row/alpha_col values below only when fewer than min_measured pixels were measured;",
-            "e. crosstalk.isolation_radius: a hot pixel is 'isolated' for alpha measurement if no other hot pixel is within this many pixels"
+            "c. crosstalk.correct_neighbors: deconvolves IPC per pixel, where the neighboring pixel read first gets alpha_asym_1, the other 3 share alpha_asym_3",
+            "d. crosstalk.correct_neighbors.per_pixel_alpha: uses each isolated hot pixel's own measured alpha where available, else that night's median, else the default values defined;",
+            "e. crosstalk.isolation_radius: pixel distance defining an isolated hot pixel for alpha measurement"
         ],
         "threshold": {
             "sigma": 5.0,
@@ -43,12 +43,11 @@
             "isolation_radius": 3,
             "correct_neighbors": {
                 "apply": true,
-                "alpha_row": 0.01,
-                "alpha_col": 0.01,
+                "alpha_asym_3": 0.01,
+                "alpha_asym_1": 0.01,
                 "per_pixel_alpha": {
                     "apply": true,
-                    "sigma": 5.0,
-                    "min_measured": 200
+                    "min_measured": 100
                 }
             }
         }
