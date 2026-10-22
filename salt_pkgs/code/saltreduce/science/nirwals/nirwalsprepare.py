@@ -496,8 +496,8 @@ def generate_bpm(obs_date, log, **kwargs):
 
     return
 
-# ---------------------------------------------------------------------------- #
-def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, exptime, bpm_dir, zoom_centre=(300, 1340), zoom_size=80):
+# ---------------------------------------------------------------------------- #  # for full detector: zoom_centre=(1024, 1024), zoom_size=2048
+def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, exptime, bpm_dir, zoom_centre=(300, 1500), zoom_size=100):
 # ---------------------------------------------------------------------------- #
     rows, cols = before.shape
     cx, cy = zoom_centre
