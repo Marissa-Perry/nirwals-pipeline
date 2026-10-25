@@ -2160,7 +2160,8 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     if scale_sky_cont:
         sky_cf_obj_mean_scaled = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
         sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw, med_sky_raw,
-                                    obj_fit_cont, sky_fit_cont, method, scale_curve, sky_cf_obj_mean, sky_cf_obj_mean_scaled)
+                                    obj_fit_cont, sky_fit_cont, method, scale_curve, sky_cf_obj_mean, sky_cf_obj_mean_scaled,
+                                    sci_cf_obj_mean)
     else:
         sci_frame_fibers = (sci_cs_image + sci_cf_image)[obj_bundle_mask]
         sky_frame_fibers = (sky_cs_image + sky_cf_image)[obj_bundle_mask]
@@ -2190,12 +2191,14 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
 # ---------------------------------------------------------------------------- #
 def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw, med_sky_raw,
-                                obj_fit_curve, sky_fit_curve, method, scale_curve, sky_cf_obj_mean, sky_cf_obj_mean_scaled):
+                                obj_fit_curve, sky_fit_curve, method, scale_curve, sky_cf_obj_mean, sky_cf_obj_mean_scaled,
+                                sci_cf_obj_mean):
 # ---------------------------------------------------------------------------- #
     '''
     sky-bundle fibres and their continuum fits (science vs sky exposure), the correction curve
-    applied (ratio or additive offset), and its effect on the object-bundle's sky-frame continuum
-    before it is subtracted.
+    applied (ratio or additive offset), and the resulting object-bundle sky-continuum subtraction:
+    sky-frame continuum before/after scaling, the science frame's own continuum, and what remains
+    once the scaled sky continuum is subtracted from it.
     '''
     fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(8, 11), sharex=True, gridspec_kw={'hspace': 0.3})
 
@@ -2224,11 +2227,15 @@ def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw
     ax3.set_ylabel('scale factor' if method == 'ratio' else 'offset [counts / s]', fontsize=14, labelpad=15)
     ax3.set_title('{0} correction'.format(method), fontsize=15, pad=13)
 
-    ax4.step(wave, sky_cf_obj_mean, where='mid', color='grey', lw=1.0, label='unscaled')
-    ax4.step(wave, sky_cf_obj_mean_scaled, where='mid', color='black', lw=1.0, label='scaled')
+    subtracted_sci_cf = sci_cf_obj_mean - sky_cf_obj_mean_scaled
+    ax4.axhline(0, color='grey', ls='dashed', lw=0.8)
+    ax4.step(wave, sky_cf_obj_mean, where='mid', color='grey', lw=1.0, label='unscaled sky')
+    ax4.step(wave, sky_cf_obj_mean_scaled, where='mid', color='black', lw=1.0, label='scaled sky')
+    ax4.step(wave, sci_cf_obj_mean, where='mid', color='darkorange', lw=1.0, ls='dashed', label='raw science')
+    ax4.step(wave, subtracted_sci_cf, where='mid', color='firebrick', lw=1.5, label='subtracted science')
     ax4.set_ylabel('counts / s', fontsize=14, labelpad=15)
-    ax4.legend(fontsize=12, loc='upper right')
-    ax4.set_title('object-bundle, sky-frame continuum', fontsize=15, pad=13)
+    ax4.legend(fontsize=11, loc='upper right')
+    ax4.set_title('object-bundle sky-continuum subtraction', fontsize=15, pad=13)
     ax4.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
 
     plot_dir = get_plot_dir(work, 'sky_subtraction')
