@@ -13,4 +13,3 @@ from .saltfitting import InterFit
 from .ipc_correction import ipc_correction_global
 from .ipc_correction import isolated_hot_pixels
 from .ipc_correction import build_alpha_maps
-from .ipc_correction import expected_dark_noise

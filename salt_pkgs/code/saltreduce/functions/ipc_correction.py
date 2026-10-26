@@ -45,21 +45,36 @@ def ipc_correction_global(image, alpha_asym_3, alpha_asym_1, bpm=None, calibrate
 
 
 def isolated_hot_pixels(data, threshold, radius=5):
-    '''Pixels above threshold, and the subset with no other such pixel within radius pixels.'''
+    '''Pixels above threshold, the isolated subset, and how many hot pixels are nearby each pixel.'''
     hot_pixel = np.isfinite(data) & (data > threshold)
     box = np.ones((2 * radius + 1, 2 * radius + 1))
     nearby = convolve(hot_pixel.astype(float), box, mode='constant', cval=0.0)
-    return hot_pixel, hot_pixel & (nearby == 1)
+    return hot_pixel, hot_pixel & (nearby == 1), nearby
 
 
-def build_alpha_maps(dark, med, candidates, fallback_alpha_asym_3, fallback_alpha_asym_1, min_measured=100):
+def leakage_caused_hotpixels(hot_pixel, candidates, nearby_count):
+    '''
+    Hot pixels whose only disqualifying neighbor is their own read-before neighbor.
+    '''
+    l_to_r = amp_reads_left_to_right(hot_pixel.shape[1])
+    # each pixel's own read-before neighbor, direction-dependent; edge wraparound from np.roll lands
+    # only in columns 0/-1, already skipped by callers' own edge checks
+    read_before_hot = np.where(l_to_r[None, :], np.roll(hot_pixel, 1, axis=1), np.roll(hot_pixel, -1, axis=1))
+    # the only other hot pixel nearby is this pixel's own read-before neighbor -- not independent contamination
+    return hot_pixel & ~candidates & (nearby_count == 2) & read_before_hot
+
+
+def build_alpha_maps(dark, med, hot_pixel, candidates, nearby_count, fallback_alpha_asym_3, fallback_alpha_asym_1, min_measured=100):
     '''
     Per-pixel alpha_asym_3, alpha_asym_1, and a diagnostic alpha_sym, measured from isolated hot pixels in dark.
     '''
     l_to_r = amp_reads_left_to_right(dark.shape[1])
+    leakage_caused_hotpixel = leakage_caused_hotpixels(hot_pixel, candidates, nearby_count)
+
     all_asym_3_ests, all_asym_1_ests = [], []   # every candidate's raw estimate, for the frame-median fallback below
-    coords, asym_3_ests, asym_1_ests, sym_ests = [], [], [], []   # ones that pass coupling limits, for per-pixel assignment
-    for r, c in zip(*np.where(candidates)):
+    coords_3, asym_3_ests = [], []   # pixels with a trustworthy asym_3, for per-pixel assignment
+    coords_1, asym_1_ests, sym_ests = [], [], []   # pixels with a trustworthy asym_1/sym
+    for r, c in zip(*np.where(candidates | leakage_caused_hotpixel)):
         if r < 1 or r > dark.shape[0] - 2 or c < 1 or c > dark.shape[1] - 2:
             continue   # skip pixels at the detector edge
         if not (l_to_r[c - 1] == l_to_r[c] == l_to_r[c + 1]):
@@ -74,41 +89,46 @@ def build_alpha_maps(dark, med, candidates, fallback_alpha_asym_3, fallback_alph
         asym_1_est = left_est if l_to_r[c] else right_est   # left-to-right amp: left neighbor is read first
         after_est = right_est if l_to_r[c] else left_est        # the other row-neighbor, read after the source pixel
         asym_3_est = (up_est + down_est + after_est) / 3        # mean of 3 other neighbors
+
+        if leakage_caused_hotpixel[r, c]:
+            # read-before neighbor isn't trusted here, so only asym_3 gets measured
+            all_asym_3_ests.append(asym_3_est)
+            if 0 < asym_3_est < 0.125:
+                coords_3.append((r, c))
+                asym_3_ests.append(asym_3_est)
+            continue
+
         sym_est = (up_est + down_est + left_est + right_est) / 4   # all 4 neighbors equally weighted, ignoring the split
         all_asym_3_ests.append(asym_3_est)
         all_asym_1_ests.append(asym_1_est)
         # reasonable coupling fraction limits
-        if 0 < asym_3_est < 0.125 and 0 < asym_1_est < 0.125: 
-            coords.append((r, c))
+        if 0 < asym_3_est < 0.125 and 0 < asym_1_est < 0.125:
+            coords_3.append((r, c))
             asym_3_ests.append(asym_3_est)
+            coords_1.append((r, c))
             asym_1_ests.append(asym_1_est)
             sym_ests.append(sym_est)
 
     if len(all_asym_3_ests) >= min_measured:
         default_alpha_asym_3 = np.median(all_asym_3_ests)
-        default_alpha_asym_1 = np.median(all_asym_1_ests)
     else:
         default_alpha_asym_3 = fallback_alpha_asym_3   # too few measured pixels to trust this frame's own median
+    if len(all_asym_1_ests) >= min_measured:
+        default_alpha_asym_1 = np.median(all_asym_1_ests)
+    else:
         default_alpha_asym_1 = fallback_alpha_asym_1
 
     alpha_asym_3_map = np.full(dark.shape, default_alpha_asym_3, dtype=float)
     alpha_asym_1_map = np.full(dark.shape, default_alpha_asym_1, dtype=float)
     # diagnostic plot comparing asymmetric correction (used in reduction) and a symmetric correction
     alpha_sym_map = np.full(dark.shape, np.median(sym_ests) if sym_ests else fallback_alpha_asym_3, dtype=float)
-    measured = np.zeros(dark.shape, dtype=bool)   # these pixels can still act as leak sources even where otherwise masked out
-    for (r, c), asym_3_est, asym_1_est, sym_est in zip(coords, asym_3_ests, asym_1_ests, sym_ests):
+    measured_3 = np.zeros(dark.shape, dtype=bool)   # these pixels can still act as leak sources even where otherwise masked out
+    for (r, c), asym_3_est in zip(coords_3, asym_3_ests):
         alpha_asym_3_map[r, c] = asym_3_est
+        measured_3[r, c] = True
+    measured_1 = np.zeros(dark.shape, dtype=bool)
+    for (r, c), asym_1_est, sym_est in zip(coords_1, asym_1_ests, sym_ests):
         alpha_asym_1_map[r, c] = asym_1_est
         alpha_sym_map[r, c] = sym_est
-        measured[r, c] = True
-    return alpha_asym_3_map, alpha_asym_1_map, alpha_sym_map, measured, default_alpha_asym_3, default_alpha_asym_1
-
-
-def expected_dark_noise(background_rate, exptime, n_frames, gain, read_noise_e):
-    '''
-    Expected shot+read noise (counts/s) on a master dark's background level.
-    '''
-    dark_signal_e = background_rate * exptime * gain   # accumulated signal per raw frame, in electrons
-    shot_noise_e = np.sqrt(dark_signal_e)
-    frame_noise_e = np.sqrt(shot_noise_e ** 2 + read_noise_e ** 2)
-    return (frame_noise_e / gain) / exptime / np.sqrt(n_frames)   # back to counts/s, averaged over n_frames
+        measured_1[r, c] = True
+    return alpha_asym_3_map, alpha_asym_1_map, alpha_sym_map, measured_3, measured_1, default_alpha_asym_3, default_alpha_asym_1

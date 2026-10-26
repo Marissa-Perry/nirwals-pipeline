@@ -22,6 +22,7 @@ from astropy.stats import mad_std
 # matplotlib imports
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
+from matplotlib.ticker import LogLocator
 
 # Local application imports
 # - saltutility.keys
@@ -43,7 +44,6 @@ from ...functions import Fit1D
 from ...functions import ipc_correction_global
 from ...functions import isolated_hot_pixels
 from ...functions import build_alpha_maps
-from ...functions import expected_dark_noise
 from ...primary.primary_reductions import duplicate
 
 # ---------------------------------------------------------------------------- #
@@ -161,7 +161,7 @@ def generate_bpm(obs_date, log, **kwargs):
     correct_neighbors = False
     alpha_asym_3 = None
     alpha_asym_1 = None
-    measured = None
+    measured_3 = None
 
     # check if BPM generation was overrided for this observation night and retrieve BPM in prd dir
     if not generate:
@@ -311,7 +311,7 @@ def generate_bpm(obs_date, log, **kwargs):
         alpha_asym_3 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_3']
         alpha_asym_1 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_1']
         if correct_neighbors:
-            measured = np.zeros(bpm.shape, dtype=bool)
+            measured_3 = np.zeros(bpm.shape, dtype=bool)
             isolation_radius = config['bpm']['crosstalk'].get('isolation_radius', 5)
             # a pixel's own alpha is measured only where it's an isolated hot pixel -- the default alpha covers everywhere else
             per_pixel_cfg = config['bpm']['crosstalk']['correct_neighbors'].get('per_pixel_alpha', {})
@@ -319,23 +319,15 @@ def generate_bpm(obs_date, log, **kwargs):
                 min_measured = per_pixel_cfg['min_measured']
                 # isolated hot pixels for calibration are flagged at the same threshold as the BPM's own dark-current component
                 alpha_threshold = longest_dark_med + bpm_thresh_sigma * longest_dark_sig
-                _, alpha_candidates = isolated_hot_pixels(longest_dark_data, alpha_threshold, radius=isolation_radius)
-                alpha_asym_3, alpha_asym_1, alpha_sym, measured, used_asym_3, used_asym_1 = build_alpha_maps(longest_dark_data, longest_dark_med, alpha_candidates, alpha_asym_3, alpha_asym_1, min_measured=min_measured)
-                if measured.sum() >= min_measured:
-                    log.message('      - measured alpha for {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius): alpha_asym_3={3:.4f}, alpha_asym_1={4:.4f}'.format(measured.sum(), bpm_thresh_sigma, isolation_radius, used_asym_3, used_asym_1), with_header=False)
+                hot_pixel, alpha_candidates, nearby_count = isolated_hot_pixels(longest_dark_data, alpha_threshold, radius=isolation_radius)
+                alpha_asym_3, alpha_asym_1, alpha_sym, measured_3, measured_1, used_asym_3, used_asym_1 = build_alpha_maps(longest_dark_data, longest_dark_med, hot_pixel, alpha_candidates, nearby_count, alpha_asym_3, alpha_asym_1, min_measured=min_measured)
+                if measured_3.sum() >= min_measured:
+                    log.message('      - measured alpha for {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius): alpha_asym_3={3:.4f}, alpha_asym_1={4:.4f}'.format(measured_3.sum(), bpm_thresh_sigma, isolation_radius, used_asym_3, used_asym_1), with_header=False)
                 else:
-                    log.message('      - {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius) below config threshold of >{3} pixels. Using default config values alpha_asym_3={4:.4f}, alpha_asym_1={5:.4f}'.format(measured.sum(), bpm_thresh_sigma, isolation_radius, min_measured, used_asym_3, used_asym_1), with_header=False)
-                # expected noise on the dark's background level, for the calibration diagnostic plot
-                reduce_config_file = os.path.join(kwargs['config_dir'], 'nirwals', 'science_reduce.json')
-                reduce_config = load_json_file(reduce_config_file, raise_error=True)
-                gain = reduce_config['extract']['gain_default']
-                read_noise_table = {float(k): v for k, v in reduce_config['extract']['read_noise_electrons'].items()}
-                nearest_exptime = min(read_noise_table, key=lambda k: abs(k - longest_exptime))
-                read_noise_e = read_noise_table[nearest_exptime]
-                background_noise = expected_dark_noise(longest_dark_med, longest_exptime, longest_n_frames, gain, read_noise_e)
+                    log.message('      - {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius) below config threshold of >{3} pixels. Using default config values alpha_asym_3={4:.4f}, alpha_asym_1={5:.4f}'.format(measured_3.sum(), bpm_thresh_sigma, isolation_radius, min_measured, used_asym_3, used_asym_1), with_header=False)
 
                 alpha_calibration_diagnostic_plot(longest_dark_data, longest_dark_med, longest_dark_sig, bpm_thresh_sigma,
-                                                   alpha_asym_3, alpha_asym_1, alpha_sym, measured, used_asym_3, used_asym_1, background_noise, longest_exptime, bpm_dir)
+                                                   alpha_asym_3, alpha_asym_1, alpha_sym, measured_3, measured_1, used_asym_3, used_asym_1, longest_exptime, bpm_dir)
 
         # ---------- diagnostic: longest-exposure master dark only ----------
         if plot_dark is not None:
@@ -449,10 +441,10 @@ def generate_bpm(obs_date, log, **kwargs):
                 # correct IPC crosstalk across this file's own SCI data; BPM-flagged pixels can't leak into their neighbors unless individually measured
                 if correct_neighbors and SCI in hdu_names:
                     before = hdul[SCI].data
-                    after = ipc_correction_global(before, alpha_asym_3, alpha_asym_1, bpm=(bpm == 1), calibrated_pixel=measured)
+                    after = ipc_correction_global(before, alpha_asym_3, alpha_asym_1, bpm=(bpm == 1), calibrated_pixel=measured_3)
                     hdul[SCI].data = after
                     if prd_file == longest_dark_file:
-                        ipc_correction_diagnostic_plot(before, after, bpm, measured, longest_dark_med, longest_exptime, bpm_dir)
+                        ipc_correction_diagnostic_plot(before, after, bpm, measured_3, longest_dark_med, longest_exptime, bpm_dir)
                 # remove existing BPM extension if present
                 if 'BPM' in hdu_names:
                     bpm_index = hdu_names.index('BPM')
@@ -496,8 +488,8 @@ def generate_bpm(obs_date, log, **kwargs):
 
     return
 
-# ---------------------------------------------------------------------------- #  # for full detector: zoom_centre=(1024, 1024), zoom_size=2048
-def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, exptime, bpm_dir, zoom_centre=(300, 1500), zoom_size=100):
+# ---------------------------------------------------------------------------- #  # for full detector: zoom_centre=(1024, 1024), zoom_size=2048 
+def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, exptime, bpm_dir, zoom_centre=(360, 1400), zoom_size=100):
 # ---------------------------------------------------------------------------- #
     rows, cols = before.shape
     cx, cy = zoom_centre
@@ -544,12 +536,13 @@ def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, ex
 
 # ---------------------------------------------------------------------------- #
 def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_asym_3_map, alpha_asym_1_map,
-                                       alpha_sym_map, measured, used_asym_3, used_asym_1, background_noise, exptime, bpm_dir):
+                                       alpha_sym_map, measured_3, measured_1, used_asym_3, used_asym_1, exptime, bpm_dir):
 # ---------------------------------------------------------------------------- #
-    central_values = dark[measured] - med
-    asym_3_values = alpha_asym_3_map[measured]
-    asym_1_values = alpha_asym_1_map[measured]
-    sym_values = alpha_sym_map[measured]   # alpha_sym: equal-weighted mean of all 4 neighbors, for comparison against alpha_asym_3/alpha_asym_1
+    central_values = dark[measured_3] - med
+    asym_3_values = alpha_asym_3_map[measured_3]
+    central_values_1 = dark[measured_1] - med
+    asym_1_values = alpha_asym_1_map[measured_1]
+    sym_values = alpha_sym_map[measured_1]   # alpha_sym depends on the same read-before neighbor as alpha_asym_1, so it shares that mask
 
     asym_3_lo, asym_3_hi = np.percentile(asym_3_values, [16, 84])
     asym_1_lo, asym_1_hi = np.percentile(asym_1_values, [16, 84])
@@ -558,7 +551,7 @@ def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_as
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 5), sharey=True, gridspec_kw={'width_ratios': [3, 1], 'wspace': 0})
 
     ax1.axvline(med, color='grey', ls='dotted', lw=1.2)
-    ax1.axvspan(med - background_noise, med + background_noise, color='grey', alpha=0.2)
+    ax1.axvspan(med - sig, med + sig, color='grey', alpha=0.2)
     ax1.text(med + 0.005, 0.065, 'dark-current\nbackground', color='grey', ha='center', fontsize=14)
 
     # 16th-84th percentile spread of each measured distribution
@@ -566,10 +559,10 @@ def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_as
     ax1.axhspan(asym_3_lo, asym_3_hi, color='#FD8721', alpha=0.1)
     ax1.axhspan(asym_1_lo, asym_1_hi, color='#577562', alpha=0.1)
 
-    ax1.scatter(central_values, sym_values, s=8, alpha=0.1, color='#9a8c98')
+    ax1.scatter(central_values_1, sym_values, s=8, alpha=0.1, color='#9a8c98')
     ax1.axhline(np.median(sym_values), color='#9a8c98', ls='--', lw=1.2, zorder=4)
     ax1.scatter(central_values, asym_3_values, s=8, alpha=0.15, color='#fec89a')
-    ax1.scatter(central_values, asym_1_values, s=8, alpha=0.15, color='#B9CBC0')
+    ax1.scatter(central_values_1, asym_1_values, s=8, alpha=0.15, color='#B9CBC0')
     # used_asym_3/used_asym_1 are what's actually applied this run -- may be the config fallback, not this frame's own median
     ax1.axhline(used_asym_3, color='#FD8721', ls='--', lw=1.2, zorder=5)
     ax1.axhline(used_asym_1, color='#577562', ls='--', lw=1.2, zorder=6)
@@ -579,6 +572,9 @@ def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_as
     ax1.set_xlabel('pixel value [counts/s]', fontsize=16, labelpad=15)
     ax1.set_ylabel(r'$\alpha$', fontsize=20, labelpad=15)
     ax1.set_ylim(-0.0001, 0.06)
+    ax1.set_xlim(10**-2, 10**(4.5)) 
+    ax1.xaxis.set_major_locator(LogLocator(base=10.0, numticks=15))   # label every power of 10
+    ax1.xaxis.set_minor_locator(LogLocator(base=10.0, subs=np.arange(2, 10), numticks=15))
     ax1.tick_params(labelsize=14)
 
     # right panel: alpha distribution
