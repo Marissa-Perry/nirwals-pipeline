@@ -527,7 +527,7 @@ def ipc_correction_diagnostic_plot(before, after, bpm, measured, median_dark, ex
         ax.set_title(title, fontsize=15)
         fig.colorbar(im, ax=ax, label='counts / s', shrink=1.0)
     fig.suptitle(fr'{round(exptime,-2)}s master dark', fontsize=18)
-
+    plt.tight_layout()
     plot_dir = os.path.join(bpm_dir, 'plots')
     os.makedirs(plot_dir, exist_ok=True)
     filepath = os.path.join(plot_dir, 'IPC_correction.png')
