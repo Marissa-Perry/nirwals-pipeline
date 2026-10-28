@@ -1821,15 +1821,15 @@ def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter)
     '''
     Fit the multiplicative scale that matches the sky-frame sky lines to the
     science-frame sky lines before subtraction, by minimizing the sky-subtracted
-    residual (sci - scale * sky) over the sky-line pixels.
+    residual (sci - scale * sky) over the skyline pixels.
 
     For each output element the scale is the least-squares projection
         scale = sum(sky * sci) / sum(sky * sky)
-    evaluated over the sky-line pixels only, with iterative sigma-clipping so bright line cores do not drag the fit.
+    evaluated over the skyline pixels only, with iterative sigma-clipping so bright line cores do not drag the fit.
 
     sci_image : 2D continuum-subtracted science image (fibre x wavelength)
     sky_image : 2D continuum-subtracted sky image (fibre x wavelength)
-    line_mask : 2D boolean mask, True on the sky-line pixels to fit over
+    line_mask : 2D boolean mask, True on the skyline pixels to fit over
     axis      : axis to collapse when fitting -- axis=0 returns a per-wavelength (column) scale fit across fibres; axis=1 returns a per-fibre (row) scale fit across wavelengths
     n_sigma   : residual sigma-clipping threshold
     n_iter    : number of sigma-clipping iterations
@@ -2011,10 +2011,26 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
                 sky_a_ivar = skyhdu['IVAR'].data.copy()
                 break
 
-    # Broadcast the catalog-based skyline mask (True = on a skyline) to the full image shape
+    # no sky skyline scaling for standard stars -- leaked starlight in the sky bundle would read as spurious "skylines", and the star is bright enough that this doesn't matter for it
+    is_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in work['sky_scaling']['continuum']['skip_for_objects'])
+    safe = ~work['skyline_mask']
+    if is_standard or not safe.any():
+        extra_mask = np.zeros_like(safe)
+    else:
+        # flag columns with excess signal which are not already in the catalog mask
+        sky_resid = np.nanmedian(sky_cs_image, axis=0)
+        resid_med = np.nanmedian(sky_resid[safe])
+        resid_sigma = mad_std(sky_resid[safe], ignore_nan=True)
+        extra_mask = (sky_resid - resid_med > work['sky_scaling']['residual_sigma'] * resid_sigma) & safe
+    scale_mask = work['skyline_mask'] | extra_mask
+
+    msg = '   - skyline mask: {0} extra column(s) flagged from sky-bundle residual'.format(extra_mask.sum())
+    log.message(msg, with_header=False)
+
+    # Broadcast the skyline mask (True = on a skyline) to the full image shape
     rows, cols = sci_cs_image.shape
-    line_mask = np.broadcast_to(work['skyline_mask'], (rows, cols))   # True on sky lines (the fit region)
-    interline_image_mask = line_mask.astype(np.float32)               # 1.0 on sky lines, 0.0 on interline
+    line_mask = np.broadcast_to(scale_mask, (rows, cols))   # True on sky lines (the fit region)
+    interline_image_mask = line_mask.astype(np.float32)     # 1.0 on sky lines, 0.0 on interline
 
     # Per-column (non-skyline) mask. This is same one used for object-bundle fiber continuum fits
     continuum_safe_col = ~work['skyline_mask']
@@ -2131,7 +2147,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     # restores the science frame's own continuum, subtracting sky's continuum contribution
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image_scaled)
 
-    # Diagnostic plots of the sky-line and sky-continuum correction terms and their effect on the subtraction
+    # Diagnostic plots of the skyline and sky-continuum correction terms and their effect on the subtraction
     skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled)
     skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask)
     if scale_sky_cont:
@@ -2319,24 +2335,21 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, science_spectral_su
 def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled):
 # ---------------------------------------------------------------------------- #
     '''
-    Diagnostic plots for the (residual-minimising) sky-line scaling.
- 
+    Diagnostic plots for the (residual-minimising) skyline scaling.
+
     Three figures:
- 
+
       1. {file}_skyline_scaling_wavelength.png
-         Wavelength-dependent scale term scale_wave (per spectral channel, fit across
-         fibres), shown only where sky lines exist, with the count of sky-line
-         pixels per channel.
- 
+         Wavelength-dependent scale term scale_wave (per spectral channel, fit across fibres), 
+         shown only where sky lines exist, with the count of skyline pixels per channel.
+
       2. {file}_skyline_scaling_fiber.png
-         Fibre-dependent scale term scale_fiber (per fibre, fit across wavelengths on
-         the wavelength-scaled sky), with the count of sky-line pixels per fibre.
- 
+         Fibre-dependent scale term scale_fiber (per fibre, fit across wavelengths on the wavelength-scaled sky), 
+         with the count of skyline pixels per fibre.
+
       3. {file}_skyline_subtraction.png
-         The applied combined scale (scale_fiber x scale_wave) and its effect: sky before
-         scaling, the applied scale factor, and the sky-subtracted science before
-         vs after scaling -- so the reduction in sky-line residuals is directly
-         visible.
+         The applied combined scale (scale_fiber x scale_wave) and its effect: 
+         sky before scaling, the applied scale factor, and the sky-subtracted science before vs after scaling 
     '''
     import matplotlib as mpl
     from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -2346,7 +2359,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     fibre_idx = np.arange(n_fibre)
     chan_idx = np.arange(n_chan)
  
-    # Sky-line pixel counts collapsed along each dimension (line_mask True on lines)
+    # skyline pixel counts collapsed along each dimension (line_mask True on lines)
     n_line_per_chan = line_mask.sum(axis=0)     # per spectral channel (max = n_fibre)
     n_line_per_fibre = line_mask.sum(axis=1)    # per fibre            (max = n_chan)
  
@@ -2394,9 +2407,9 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     # 2) fibre-dependent scale term (scale_fiber)
     # ------------------------------------------------------------------ #
     scale_fiber_plot = np.where(n_line_per_fibre > 0, scale_fiber, np.nan)
- 
+
     fig, axs = plt.subplots(2, 1, figsize=(8, 4), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [4, 1]})
- 
+
     axs[0].plot(fibre_idx, scale_fiber_plot, lw=1.2, color='k')
     axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
     axs[0].set_ylabel('scale factor', fontsize=12, labelpad=10)
@@ -2405,7 +2418,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     axs[1].set_ylabel('# of skyline\npixels', fontsize=11, labelpad=10)
     axs[1].set_xlabel('fiber #', fontsize=12, labelpad=12)
     axs[1].set_xlim(0, n_fibre - 1)
- 
+
     fig.savefig(stub + '_skyline_scaling_fiber.png', dpi=180, format='png', bbox_inches='tight')
     plt.close(fig)
  
@@ -3179,7 +3192,7 @@ def evaluate_resolution(res, waves):
     fwhm_stack = np.vstack([np.polyval(c, waves) for c in coeffs])  # (n_fibres, N)
     R_stack = waves[None, :] / fwhm_stack
 
-    # mask wavelengths outside the sky-line coverage / with unphysical FWHM
+    # mask wavelengths outside the skyline coverage / with unphysical FWHM
     bad = (waves < res['w_min']) | (waves > res['w_max'])
     R_stack[:, bad] = np.nan
     R_stack[fwhm_stack <= 0] = np.nan
