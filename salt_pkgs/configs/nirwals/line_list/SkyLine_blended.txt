@@ -1,7 +1,7 @@
-# These ranges of blended skylines were identified by eye and are defined for J-band observations.
-# Y-band skylines are well-documented (SkyLines.txt) within blended regions. 
+# These ranges of blended skylines were identified by eye and are defined for Y- and J-band observations.
 # Not yet defined for H-band observations.
 #
 # wave_min   wave_max
   12590.000  12677.000
   12680.000  12765.000
+  10595.000  10605.000
