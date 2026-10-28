@@ -18,7 +18,6 @@ import numpy as np
 # scipy imports
 from scipy.signal import find_peaks
 from scipy.signal import savgol_filter
-from scipy.ndimage import median_filter
 from scipy.optimize import curve_fit
 # astropy imports
 from astropy.io import fits
@@ -928,6 +927,13 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     # Reset columns in work dictionary
     work['cols'] = len(we)
 
+    # Build the catalog-based skyline mask now that 'we' and 'specres_fit' are both set
+    work['skyline_mask'] = build_skyline_mask(work, log)
+    if work['skyline_mask'] is None:
+        msg = '   - skyline mask not built, aborting!'
+        log.message(msg, with_header=False)
+        return
+
     # Add message to log
     msg = '   - solution wavelength range: {0:.3f} - {1:.3f}'
     log.message(msg.format(ws['w_min'], ws['w_max']), with_header=False)
@@ -964,7 +970,7 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     sky_bundle_mask = np.array([traces[fid]['type'] == 'sky' for fid in fibres.keys()])
 
     # Fit and subtract continuum, using the sky exposure's own skyline mask for the science frame
-    cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log, mask_skylines=(work['exp_type'] == 'science'))
+    cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log)
     # Write new fits file: continuum fit
     write_new_fits(hdu, cf_image, None, '', 'cf', work, log)
     # Write new fits file: continuum subtracted
@@ -1571,21 +1577,7 @@ def fit_and_subtract_continuum_for_fibre(key, id, work, log):
     return farr
 
 # ---------------------------------------------------------------------------- #
-def load_sky_product(hdu, work, tag):
-# ---------------------------------------------------------------------------- #
-    trg_name = hdu[PRIMARY].header['OBJECT']
-    # no dedicated sky exposure to load from
-    if 'sky' not in work['exposures'] or work['wrk_config'] not in work['exposures']['sky']:
-        return None
-    # match the sky exposure by target name, same as the object being reduced
-    for entry in work['exposures']['sky'][work['wrk_config']][tag]:
-        with fits.open(entry['file'], mode='readonly') as skyhdu:
-            if product_object(skyhdu) == trg_name:
-                return product_flux_data(skyhdu).copy()
-    return None
-
-# ---------------------------------------------------------------------------- #
-def fit_and_subtract_continuum_for_image(hdu, key, image, work, log, mask_skylines=False):
+def fit_and_subtract_continuum_for_image(hdu, key, image, work, log):
 # ---------------------------------------------------------------------------- #
 
     # Add message to log
@@ -1602,22 +1594,8 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log, mask_skylin
     mask = np.ones((rows, cols), dtype=bool)
     # Set 'x' (wavelength) array
     xarr = work['we']
-    # masking out strong skyline regions before continuum fitting
-    if mask_skylines:
-        # use the sky exposure's own skyline-location mask, instead of a locally-estimated threshold
-        sky_sf_image = load_sky_product(hdu, work, 'sf')
-        skyline_image_mask = set_skyline_mask(hdu, work, log, sf_image=sky_sf_image) if sky_sf_image is not None else None
-    else:
-        skyline_image_mask = set_skyline_mask(hdu, work, log, sf_image=None)
-    # if no sky exposures found, no masking
-    if skyline_image_mask is None:
-        skyline_col = np.ones(cols, dtype=bool)
-    else:
-        fiber_frac = work['continuum']['gpm']['threshold']['fiber_frac']  # only masking columns that at least some percentage of fibers agree are skyline dominated
-        # collapse skyline into 1D array and broadcast back to 2D dimension of image
-        # this avoids the dimension mismatch of 'a' and input image and follows the logic that this should mostly be row (fiber) independent
-        skyline_col = skyline_image_mask.mean(axis=0) >= fiber_frac
-    skyline_image_mask = np.broadcast_to(skyline_col, (rows, cols))
+    # broadcast skyline mask (True = on a skyline) to the full image shape
+    skyline_image_mask = np.broadcast_to(work['skyline_mask'], (rows, cols))
 
     # Loop for image rows...
     for i in range(rows):
@@ -1631,8 +1609,8 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log, mask_skylin
         skyline_row_mask = skyline_image_mask[i, :]  # mask to be applied during continuum fitting
 
         # set masks for continuum fitting (1D version for fitting and 2D version for plotting)
-        image_fit_mask = edges_image_mask & skyline_image_mask
-        row_fit_mask = edges_row_mask & skyline_row_mask
+        image_fit_mask = edges_image_mask & ~skyline_image_mask
+        row_fit_mask = edges_row_mask & ~skyline_row_mask
 
         # Fit continuum
         cf = fit_continuum(key, 'row', i + 1, xarr, yarr, row_fit_mask, work, log)
@@ -2033,14 +2011,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
                 sky_a_ivar = skyhdu['IVAR'].data.copy()
                 break
 
-    # Build the strong-sky-line mask from the sky exposure's sky-fit image
-    skyline_image_mask = set_skyline_mask(hdu, work, log, sf_image=sky_sf_image)
-    interline_image_mask = (~skyline_image_mask).astype(np.float32)   # 1.0 on sky lines, 0.0 on interline
-    line_mask = interline_image_mask.astype(bool)                     # True on sky lines (the fit region)
+    # Broadcast the catalog-based skyline mask (True = on a skyline) to the full image shape
+    rows, cols = sci_cs_image.shape
+    line_mask = np.broadcast_to(work['skyline_mask'], (rows, cols))   # True on sky lines (the fit region)
+    interline_image_mask = line_mask.astype(np.float32)               # 1.0 on sky lines, 0.0 on interline
 
-    # Collapsed per-column interline mask -- same fiber_frac threshold used for object-bundle fiber continuum fits
-    fiber_frac = work['continuum']['gpm']['threshold']['fiber_frac']
-    continuum_safe_col = skyline_image_mask.mean(axis=0) >= fiber_frac
+    # Per-column (non-skyline) mask. This is same one used for object-bundle fiber continuum fits
+    continuum_safe_col = ~work['skyline_mask']
 
     # Residual sigma-clipping parameters for the sky-scale fit
     n_sigma = work['sky_scaling']['n_sigma']
@@ -2203,6 +2180,16 @@ def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw
     fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(8, 11), sharex=True, gridspec_kw={'hspace': 0.3})
 
     wave = work['we']
+
+    # skyline + blended region mask excluded from the sky-bundle continuum fit
+    skyline_mask = work['skyline_mask']
+    change = np.diff(np.concatenate([[0], skyline_mask.astype(int), [0]]))
+    starts = wave[np.where(change == 1)[0]]
+    ends = wave[np.where(change == -1)[0] - 1]
+    for ax in (ax1, ax2):
+        for s, e in zip(starts, ends):
+            ax.axvspan(s, e, color='grey', alpha=0.05, zorder=0)
+
     for i, row in enumerate(raw_obj_bundle):
         ax1.step(wave, row, where='mid', color='orange', lw=0.4, alpha=0.25, label='science fibre' if i == 0 else None)
     for i, row in enumerate(raw_sky_bundle):
@@ -2220,7 +2207,7 @@ def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw
     ax2.plot(wave, sky_fit_curve, color='tab:blue', lw=1.3)
     ax2.axhline(0, color='grey', ls='dashed', lw=0.8)
     ax2.set_ylabel('counts / s', fontsize=14, labelpad=15)
-    ax2.set_ylim(min(obj_fit_curve.min(), sky_fit_curve.min())-0.2, max(obj_fit_curve.max(), sky_fit_curve.max())+0.2)
+    ax2.set_ylim(min(obj_fit_curve.min(), sky_fit_curve.min())-0.01, max(obj_fit_curve.max(), sky_fit_curve.max())+0.3)
     ax2.set_title('sky-bundle continuum fits', fontsize=15, pad=13)
 
     ax3.step(wave, scale_curve, where='mid', color='black', lw=0.8)
@@ -2519,49 +2506,34 @@ def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask):
 
 
 # ---------------------------------------------------------------------------- #
-def set_skyline_mask(hdu, work, log, sf_image=None):
+def build_skyline_mask(work, log):
 # ---------------------------------------------------------------------------- #
     '''
-    Generate a 2D mask for strong skyline regions.
+    Catalog-based skyline mask.
 
-    For continuum fitting, uses wavelength-calibrated sky exposure ('a') to compute the mask.
-
-    For sky subtraction, uses sky exposure sky-fit ('sf') to compute the mask.
+    Narrow lines (SkyLines.txt) are masked within +/- 1 FWHM of each catalog wavelength.
+    Blended ranges (SkyLine_blended.txt) are masked across their full span.
     '''
-    # if no sky-fit image is provided, use the wavelength-calibrated sky exposure from hdu
-    if sf_image is None:
-        sky_image = load_sky_product(hdu, work, 'a')
-        if sky_image is None:
-            log.message('   - sky wavelength-calibrated image not found!', with_header=False)
-            return None
-        # Set gpm threshold dictionary for masking sky spectral channels fit
-        sky_thresh = work['continuum']['gpm']['threshold']
+    if work.get('specres_fit') is None:
+        log.message('   - skyline mask: no specres_fit available, cannot build FWHM-based mask!', with_header=False)
+        return None
 
-    else:
-        # set sky image to use for mask
-        sky_image = sf_image.copy()
-        # Set gpm threshold dictionary for masking sky spectral channels fit
-        sky_thresh = work['spectral_channels']['gpm']['threshold']
+    we = work['we']
+    mask = np.zeros(we.shape, dtype=bool)
 
-    # Check if threshold type for masking is 'auto'
-    if sky_thresh['type'] == 'auto':
-        # use broad filtering of spectra to estimate continuum level
-        median_filt_window_size = sky_thresh['auto']['median_filt_window_size']
-        continuum_baseline = median_filter(sky_image, size=(1, median_filt_window_size), mode='nearest')
-        # Clip sky spectral channels fit
-        tmp = sigma_clip(sky_image, **sky_thresh['auto']['sigma_clip'])
-        stdev = np.std(tmp)
-        # Set threshold: stddev from sigma clipped continuum
-        thresh = continuum_baseline + sky_thresh['auto']['scale'] * stdev
+    # narrow catalog lines
+    fwhm_margin = 1
+    sky_waves = load_sky_lines(work, log)
+    fwhm_at_lines = sky_waves / evaluate_resolution(work['specres_fit'], sky_waves)
+    for lam0, hw in zip(sky_waves, fwhm_margin * fwhm_at_lines):
+        mask |= (np.abs(we - lam0) <= hw)
 
-    # .. else check if threshold type for masking is 'value'
-    elif sky_thresh['type'] == 'value':
-        # Set threshold value
-        thresh = sky_thresh['value']
+    # blended ranges
+    wmin, wmax = load_blended_sky_lines(work, log)
+    for lo, hi in zip(wmin, wmax):
+        mask |= (we >= lo) & (we <= hi)
 
-    # masking out strong skyline regions
-    skyline_mask = (sky_image <= thresh)  # if on skyline false, else (interline regions) true
-    return skyline_mask
+    return mask
 
 
 # ---------------------------------------------------------------------------- #
@@ -2959,9 +2931,24 @@ def load_sky_lines(work, log):
     msg = ' - load line list: sky'
     log.message(msg, with_header=False)
     # Load line list
-    swarr = np.loadtxt(work['line_lists']['sky'], unpack=True, usecols=(0))
+    ll_file = os.path.join(work['config_dir'], work['line_lists']['sky'])
+    swarr = np.loadtxt(ll_file, unpack=True, usecols=(0))
+    swarr.sort()  # increasing order, required by evaluate_resolution()'s interpolation
 
     return swarr
+
+# ---------------------------------------------------------------------------- #
+def load_blended_sky_lines(work, log):
+# ---------------------------------------------------------------------------- #
+
+    # Add message to log
+    msg = ' - load line list: sky (blended ranges)'
+    log.message(msg, with_header=False)
+    # Load line list
+    ll_file = os.path.join(work['config_dir'], work['line_lists']['sky_blended'])
+    wmin, wmax = np.loadtxt(ll_file, unpack=True, usecols=(0, 1))
+
+    return np.atleast_1d(wmin), np.atleast_1d(wmax)
 
 # ---------------------------------------------------------------------------- #
 def get_fibre_centre(fibre, m, work):
