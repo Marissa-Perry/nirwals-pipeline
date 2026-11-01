@@ -26,10 +26,10 @@
     },
 
     "bpm": {
-        "generate": true,
+        "allow_existing": true,
         "notes": [
-            "a. If true, will generate BPM from master flat, master darks, and pixels flagged during up-the-ramp sampling.",
-            "b. dark/flat deviant pixels (>= threshold.sigma) are already masked above, independent of crosstalk;",
+            "a. the pipeline always checks this night's own work directory (NIRWALS_work/bpm/) for a pre-generated BPM file; allow_existing controls whether it's used;",
+            "b. pixels >= threshold.sigma are masked;",
             "c. crosstalk.correct_neighbors: deconvolves IPC per pixel, where the neighboring pixel read first gets alpha_asym_1, the other 3 share alpha_asym_3",
             "d. crosstalk.correct_neighbors.per_pixel_alpha: uses each isolated hot pixel's own measured alpha where available, else that night's median, else the default values defined;",
             "e. crosstalk.isolation_radius: pixel distance defining an isolated hot pixel for alpha measurement"

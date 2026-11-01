@@ -155,34 +155,37 @@ def generate_bpm(obs_date, log, **kwargs):
     config = load_json_file(config_file)
     # Set bpm sigma threshold factor from config
     bpm_thresh_sigma = config['bpm']['threshold']['sigma']  # using threshold set in config file
-    generate = config['bpm']['generate']
+    allow_existing = config['bpm'].get('allow_existing', False)
 
-    # set once the BPM is generated below, for the correction loop further down
+    # set once the BPM is generated/loaded below, for the correction loop further down
     correct_neighbors = False
     alpha_asym_3 = None
     alpha_asym_1 = None
     measured_3 = None
 
-    # check if BPM generation was overrided for this observation night and retrieve BPM in prd dir
-    if not generate:
-        log.message('   - config set to skip BPM generation.')
+    # always check this night's own work directory for a pre-generated BPM
+    existing_bpm_file = os.path.join(bpm_dir, f'NIRWALSBpm1x1_{bpm_thresh_sigma}sigma.fits')
+    found_existing = os.path.exists(existing_bpm_file)
+    use_existing = found_existing and allow_existing
 
+    if found_existing and not allow_existing:
+        log.message('   - existing BPM found ({0}) but config.bpm.allow_existing is false; generating fresh.'.format(existing_bpm_file))
+
+    if use_existing:
+        log.message('   - using existing BPM: {0}'.format(existing_bpm_file))
         try:
-            bpm_file = sorted(f for f in glob.glob(os.path.join(prd_dir, f'*Bpm*{bpm_thresh_sigma}sigma.fits')) if not duplicate(f))[0]
-            log.message('   - using file {0}'.format(bpm_file), with_header=False)
-
-            with fits.open(bpm_file) as hdul:
-                bpm = hdul['BPM'].data  # save pre-generated BPM data 
+            with fits.open(existing_bpm_file) as hdul:
+                bpm = hdul['BPM'].data  # save pre-generated BPM data
                 comment = ' '.join(str(hdul['BPM'].header['COMMENT']).split())  # save comment from header to use in new fits
             # compute the percentage of bad pixels in this BPM
             bad = len(bpm[bpm == 1])
             perc_bad = (bad / bpm.size) * 100
 
         except Exception as e:
-            log.message(f"No BPM found in product directory: {os.path.join(prd_dir, '*Bpm*.fits')}. \nAdd one or set config to generate one.", with_header=False)
-            return None
-    
-    else:
+            log.message('   - existing BPM unreadable ({0}); generating fresh instead.'.format(e), with_header=False)
+            use_existing = False
+
+    if not use_existing:
 
         log.message('   - generating BPM.')
 
