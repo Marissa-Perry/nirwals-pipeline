@@ -235,12 +235,14 @@
                 "b. method = 'ratio': sky_cf_image * obj_continuum/sky_continuum -- cancels sky-bundle/object-bundle illumination mismatch exactly, but unstable if sky_continuum crosses zero;",
                 "c. method = 'additive': sky_cf_image + (obj_continuum - sky_continuum) -- stable everywhere, but biased by illumination mismatch whenever the sky continuum genuinely changed between exposures;",
                 "d. min_sky_fibers = skip scaling if too few sky-bundle fibres have valid continuum;",
-                "e. skip_for_objects = OBJECT name prefixes (case-insensitive) to always skip scaling for -- leaked starlight in the sky-bundle would inflate the ratio with stellar flux, not real sky;",
-                "f. columns outside the sky-bundle's own valid wavelength range are left unscaled -- the continuum fit extrapolates there, not real sky"
+                "e. skip_for_objects = OBJECT name prefixes to always skip scaling for -- accounting for any leaked starlight in the sky-bundle;",
+                "f. columns outside the sky-bundle's own valid wavelength range are left unscaled -- the continuum fit extrapolates there, not real sky;",
+                "g. ratio_min_sigma = method 'ratio' only: sky continuum columns below this many sigma of their own fit uncertainty are left unscaled, instead of dividing by a near-zero/negative value"
             ],
             "enable": 1,
             "method": "ratio",
             "min_sky_fibers": 10,
+            "ratio_min_sigma": 5,
             "skip_for_objects": ["HIP", "HD"]
         }
     },

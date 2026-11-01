@@ -191,6 +191,13 @@ class Fit1D:
         if not self._has_yerr:
             return None
 
+        # rescale x into the fitted domain/window before evaluating the basis
+        domain, window = self.func.domain, self.func.window
+        if domain is not None and window is not None:
+            d0, d1 = domain
+            w0, w1 = window
+            x = (w1 - w0) * (x - d0) / (d1 - d0) + w0
+
         basis = np.array(self.func.fit_deriv(x, *self.func.parameters))   # (len(x), n_params), linear model
         cov = self.func.cov_matrix.cov_matrix
         return np.sqrt(np.einsum('ij,jk,ik->i', basis, cov, basis))

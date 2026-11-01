@@ -2109,8 +2109,15 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         sky_fit_cont = sky_cf(xarr)
         method = cfg['method']
 
+        # fit uncertainty on the object-bundle continuum curve
+        sigma_obj = obj_cf.err_at(xarr)
+        # fit uncertainty on the sky-bundle continuum curve
+        sigma_sky = sky_cf.err_at(xarr)
+
         if method == 'ratio':
-            scale_curve = np.divide(obj_fit_cont, sky_fit_cont, out=np.ones_like(obj_fit_cont), where=sky_fit_cont != 0).astype(np.float32)
+            ratio_min_sigma = cfg['ratio_min_sigma']
+            sky_nonzero = (sky_fit_cont > ratio_min_sigma * sigma_sky) if sigma_sky is not None else (sky_fit_cont > 0)
+            scale_curve = np.divide(obj_fit_cont, sky_fit_cont, out=np.ones_like(obj_fit_cont), where=sky_nonzero).astype(np.float32)
             sky_cf_image_scaled = sky_cf_image * scale_curve[None, :]
         else:
             scale_curve = (obj_fit_cont - sky_fit_cont).astype(np.float32)
@@ -2118,10 +2125,9 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         sky_cf_image_scaled[:, ~in_fit_range] = sky_cf_image[:, ~in_fit_range]   # extrapolated obj/sky_fit_cont there, not real -- leave unscaled
 
         # Fit uncertainty on the correction itself, zero where no correction was applied (unweighted fit, or outside in_fit_range)
-        sigma_obj, sigma_sky = obj_cf.err_at(xarr), sky_cf.err_at(xarr)
         if sigma_obj is not None and sigma_sky is not None:
             if method == 'ratio':
-                nz = (sky_fit_cont != 0) & (obj_fit_cont != 0)
+                nz = sky_nonzero & (obj_fit_cont != 0)
                 rel_var = np.zeros_like(obj_fit_cont, dtype=np.float32)
                 rel_var[nz] = (sigma_obj[nz] / obj_fit_cont[nz])**2 + (sigma_sky[nz] / sky_fit_cont[nz])**2
                 scale_variance = (sky_cf_image_scaled**2) * rel_var[None, :]
