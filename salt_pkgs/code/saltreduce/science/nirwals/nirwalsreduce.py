@@ -2002,8 +2002,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         # Get outa here!
         return None, None, None, None, None
 
-    # Sky exposure's own per-fiber extraction variance, for weighting the sky-bundle continuum fit --
-    # optional: if its rectified ('a') product or IVAR extension isn't there, that fit just goes unweighted
+    # Sky exposure's own per-fiber extraction variance, for weighting the sky-bundle continuum fit
     sky_a_ivar = None
     for sky_a in work['exposures']['sky'][work['wrk_config']].get('a', []):
         with fits.open(sky_a['file'], mode='readonly') as skyhdu:
@@ -2011,20 +2010,20 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
                 sky_a_ivar = skyhdu['IVAR'].data.copy()
                 break
 
-    # no sky skyline scaling for standard stars -- leaked starlight in the sky bundle would read as spurious "skylines", and the star is bright enough that this doesn't matter for it
+    # no sky skyline scaling for standard stars -- brightest fibers have negligible sky emission and difficult to accurately determine scale factor
     is_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in work['sky_scaling']['continuum']['skip_for_objects'])
     interline_mask = ~work['skyline_mask']
     if is_standard or not interline_mask.any():
-        extra_mask = np.zeros_like(interline_mask)
+        resid_skyline_mask = np.zeros_like(interline_mask)
     else:
         # flag columns with excess signal which are not already in the catalog mask
         sky_resid = np.nanmedian(sky_cs_image, axis=0)
         resid_med = np.nanmedian(sky_resid[interline_mask])
         resid_sigma = mad_std(sky_resid[interline_mask], ignore_nan=True)
-        extra_mask = (sky_resid - resid_med > work['sky_scaling']['residual_sigma'] * resid_sigma) & interline_mask
-    scale_mask = work['skyline_mask'] | extra_mask
+        resid_skyline_mask = (sky_resid - resid_med > work['sky_scaling']['residual_sigma'] * resid_sigma) & interline_mask
+    scale_mask = work['skyline_mask'] | resid_skyline_mask
 
-    msg = '   - skyline mask: {0} extra column(s) flagged from sky-bundle residual'.format(extra_mask.sum())
+    msg = '   - skyline mask: {0} extra column(s) flagged from sky-bundle residual'.format(resid_skyline_mask.sum())
     log.message(msg, with_header=False)
 
     # Broadcast the skyline mask (True = on a skyline) to the full image shape
@@ -2047,13 +2046,14 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     # Combined separable scaling image (fibre x wavelength)
     scaling_image = scale_fiber[:, None] * scale_wave[None, :]
 
-    # Apply the scaling on the sky lines only, interline regions (mask value 0) and any non-physical near-zero / negative scale are left unscaled (factor 1)
+    # Apply the scaling on the sky lines only
     scaling_image_masked = scaling_image * interline_image_mask
+    # interline regions and any near-zero / negative scale factors are left unscaled
     scaling_image_masked[scaling_image_masked < 1e-2] = 1.
 
     # Scale the sky continuum-subtracted image and subtract it from the science image
     sky_scaled = sky_cs_image * scaling_image_masked
-    sci_image = sci_cs_image - sky_scaled
+    sci_image = sci_cs_image - sky_scaled  # skylines subtracted !
 
     # Scale sky-continuum in the sky frame up to the science frame using sky-bundle fibres
     cfg = work['sky_scaling']['continuum']
