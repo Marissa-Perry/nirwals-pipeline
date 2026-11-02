@@ -2013,15 +2013,15 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
     # no sky skyline scaling for standard stars -- leaked starlight in the sky bundle would read as spurious "skylines", and the star is bright enough that this doesn't matter for it
     is_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in work['sky_scaling']['continuum']['skip_for_objects'])
-    safe = ~work['skyline_mask']
-    if is_standard or not safe.any():
-        extra_mask = np.zeros_like(safe)
+    interline_mask = ~work['skyline_mask']
+    if is_standard or not interline_mask.any():
+        extra_mask = np.zeros_like(interline_mask)
     else:
         # flag columns with excess signal which are not already in the catalog mask
         sky_resid = np.nanmedian(sky_cs_image, axis=0)
-        resid_med = np.nanmedian(sky_resid[safe])
-        resid_sigma = mad_std(sky_resid[safe], ignore_nan=True)
-        extra_mask = (sky_resid - resid_med > work['sky_scaling']['residual_sigma'] * resid_sigma) & safe
+        resid_med = np.nanmedian(sky_resid[interline_mask])
+        resid_sigma = mad_std(sky_resid[interline_mask], ignore_nan=True)
+        extra_mask = (sky_resid - resid_med > work['sky_scaling']['residual_sigma'] * resid_sigma) & interline_mask
     scale_mask = work['skyline_mask'] | extra_mask
 
     msg = '   - skyline mask: {0} extra column(s) flagged from sky-bundle residual'.format(extra_mask.sum())
@@ -2033,7 +2033,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     interline_image_mask = line_mask.astype(np.float32)     # 1.0 on sky lines, 0.0 on interline
 
     # Per-column (non-skyline) mask. This is same one used for object-bundle fiber continuum fits
-    continuum_safe_col = ~work['skyline_mask']
+    continuum_interline_col = ~work['skyline_mask']
 
     # Residual sigma-clipping parameters for the sky-scale fit
     n_sigma = work['sky_scaling']['n_sigma']
@@ -2079,7 +2079,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         med_sky_raw[has_cols] = np.nanmedian(np.where(valid_edge[:, has_cols], raw_sky_bundle[:, has_cols], np.nan), axis=0)
 
         # Variance of each median, from the two exposures' own per-fiber extraction variance -- weights the fits below
-        fit_mask_1d = has_cols & continuum_safe_col
+        fit_mask_1d = has_cols & continuum_interline_col
         xarr = work['we']
         obj_var_bundle = align_native_width(sci_variance_image, sci_cf_image.shape[1])[sky_bundle_mask]
         med_obj_var = variance_of_median(obj_var_bundle, valid_edge)
