@@ -1,4 +1,4 @@
-name: nirwals_drp_env
+name: nirwals_drp
 channels:
   - defaults
   - https://repo.anaconda.com/pkgs/main
@@ -137,4 +137,4 @@ dependencies:
       - svgwrite==1.4.3
       - threadpoolctl==3.6.0
       - urllib3==2.7.0
-prefix: /opt/anaconda3/envs/nirwals_drp_env
+prefix: /opt/anaconda3/envs/nirwals_drp

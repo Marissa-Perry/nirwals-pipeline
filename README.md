@@ -15,8 +15,8 @@ Clone this repository, then create and activate the conda environment with all d
 ```bash
 git clone https://github.com/Marissa-Perry/nirwals-pipeline.git
 cd nirwals-pipeline
-conda env create -f nirwals_drp_env.yml
-conda activate nirwals_drp_env
+conda env create -f nirwals_drp.yml
+conda activate nirwals_drp
 ```
 
 ## Usage
