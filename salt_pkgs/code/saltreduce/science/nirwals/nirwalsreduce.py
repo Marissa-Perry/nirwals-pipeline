@@ -2026,10 +2026,19 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     msg = '   - skyline mask: {0} extra column(s) flagged from sky-bundle residual'.format(resid_skyline_mask.sum())
     log.message(msg, with_header=False)
 
+    # telluric regions are excluded from the fit -- a weakened skyline there would bias the
+    # scale factor -- but skylines inside them still get scaled, using the fit from elsewhere
+    telluric_wmin, telluric_wmax = load_telluric_regions(work, log)
+    telluric_mask = np.zeros_like(scale_mask)
+    for lo, hi in zip(telluric_wmin, telluric_wmax):
+        telluric_mask |= (work['we'] >= lo) & (work['we'] <= hi)
+    fit_mask = scale_mask & ~telluric_mask
+
     # Broadcast the skyline mask (True = on a skyline) to the full image shape
     rows, cols = sci_cs_image.shape
-    line_mask = np.broadcast_to(scale_mask, (rows, cols))   # True on sky lines (the fit region)
-    interline_image_mask = line_mask.astype(np.float32)     # 1.0 on sky lines, 0.0 on interline
+    line_mask = np.broadcast_to(scale_mask, (rows, cols))     # True on sky lines (the fit region)
+    interline_image_mask = line_mask.astype(np.float32)       # 1.0 on sky lines, 0.0 on interline
+    fit_line_mask = np.broadcast_to(fit_mask, (rows, cols))   # True on sky lines used to fit the scale
 
     # Per-column (non-skyline) mask. This is same one used for object-bundle fiber continuum fits
     continuum_interline_col = ~work['skyline_mask']
@@ -2040,9 +2049,21 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
     # Scale the sky-frame sky lines onto the science-frame sky lines before subtracting
     # wavelength-dependent scale (per column), fit across fibres
-    scale_wave = sky_scale_projection(sci_cs_image, sky_cs_image, line_mask, axis=0, n_sigma=n_sigma, n_iter=n_iter)
+    scale_wave = sky_scale_projection(sci_cs_image, sky_cs_image, fit_line_mask, axis=0, n_sigma=n_sigma, n_iter=n_iter)
+
+    # telluric regions: fit those columns from sky-bundle fibres, which have no continuum to
+    # be biased by residual telluric absorption
+    telluric_skylines = scale_mask & telluric_mask
+    if telluric_skylines.any():
+        sky_bundle_line_mask = line_mask & sky_bundle_mask[:, None]
+        scale_wave_sky_bundle = sky_scale_projection(sci_cs_image, sky_cs_image, sky_bundle_line_mask, axis=0, n_sigma=n_sigma, n_iter=n_iter)
+        scale_wave[telluric_skylines] = scale_wave_sky_bundle[telluric_skylines]
+
+    msg = '   - skyline scale: {0} column(s) in telluric regions fit from sky-bundle fibres only'.format(telluric_skylines.sum())
+    log.message(msg, with_header=False)
+
     # residual fibre-dependent scale (per row), fit across wavelengths on the wavelength-scaled sky
-    scale_fiber = sky_scale_projection(sci_cs_image, sky_cs_image * scale_wave[None, :], line_mask, axis=1, n_sigma=n_sigma, n_iter=n_iter)
+    scale_fiber = sky_scale_projection(sci_cs_image, sky_cs_image * scale_wave[None, :], fit_line_mask, axis=1, n_sigma=n_sigma, n_iter=n_iter)
     # Combined separable scaling image (fibre x wavelength)
     scaling_image = scale_fiber[:, None] * scale_wave[None, :]
 
@@ -2965,6 +2986,19 @@ def load_blended_sky_lines(work, log):
     log.message(msg, with_header=False)
     # Load line list
     ll_file = os.path.join(work['config_dir'], work['line_lists']['sky_blended'])
+    wmin, wmax = np.loadtxt(ll_file, unpack=True, usecols=(0, 1))
+
+    return np.atleast_1d(wmin), np.atleast_1d(wmax)
+
+# ---------------------------------------------------------------------------- #
+def load_telluric_regions(work, log):
+# ---------------------------------------------------------------------------- #
+
+    # Add message to log
+    msg = ' - load line list: telluric'
+    log.message(msg, with_header=False)
+    # Load line list
+    ll_file = os.path.join(work['config_dir'], work['line_lists']['telluric'])
     wmin, wmax = np.loadtxt(ll_file, unpack=True, usecols=(0, 1))
 
     return np.atleast_1d(wmin), np.atleast_1d(wmax)
