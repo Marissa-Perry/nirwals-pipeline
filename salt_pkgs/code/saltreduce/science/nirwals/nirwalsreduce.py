@@ -2033,12 +2033,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     for lo, hi in zip(telluric_wmin, telluric_wmax):
         telluric_mask |= (work['we'] >= lo) & (work['we'] <= hi)
     fit_mask = scale_mask & ~telluric_mask
+    obj_bundle_mask = ~sky_bundle_mask   # exclude sky-bundle fibres from the fit below -- their own scaled output is never used
 
     # Broadcast the skyline mask (True = on a skyline) to the full image shape
     rows, cols = sci_cs_image.shape
     line_mask = np.broadcast_to(scale_mask, (rows, cols))     # True on sky lines (the fit region)
     interline_image_mask = line_mask.astype(np.float32)       # 1.0 on sky lines, 0.0 on interline
-    fit_line_mask = np.broadcast_to(fit_mask, (rows, cols))   # True on sky lines used to fit the scale
+    fit_line_mask = np.broadcast_to(fit_mask, (rows, cols)) & obj_bundle_mask[:, None]   # True on sky lines used to fit the scale, object-bundle fibres only
 
     # Per-column (non-skyline) mask. This is same one used for object-bundle fiber continuum fits
     continuum_interline_col = ~work['skyline_mask']
@@ -2121,7 +2122,6 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         in_fit_range = ((xarr >= fit_wave.min()) & (xarr <= fit_wave.max())) if fit_wave.size else np.zeros_like(xarr, dtype=bool)
 
     # Mean sky-frame continuum for the object-bundle rows
-    obj_bundle_mask = ~sky_bundle_mask
     sky_cf_obj_mean = sky_cf_image[obj_bundle_mask].mean(axis=0)
     sci_cf_obj_mean = sci_cf_image[obj_bundle_mask].mean(axis=0)
 
@@ -2175,8 +2175,8 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image_scaled)
 
     # Diagnostic plots of the skyline and sky-continuum correction terms and their effect on the subtraction
-    skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled)
-    skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask)
+    skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled, obj_bundle_mask)
+    skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask, obj_bundle_mask=obj_bundle_mask)
     if scale_sky_cont:
         sky_cf_obj_mean_scaled = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
         sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw, med_sky_raw,
@@ -2359,7 +2359,7 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, science_spectral_su
     return
 
 # ---------------------------------------------------------------------------- #
-def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled):
+def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled, obj_bundle_mask):
 # ---------------------------------------------------------------------------- #
     '''
     Diagnostic plots for the (residual-minimising) skyline scaling.
@@ -2367,12 +2367,12 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     Three figures:
 
       1. {file}_skyline_scaling_wavelength.png
-         Wavelength-dependent scale term scale_wave (per spectral channel, fit across fibres), 
+         Wavelength-dependent scale term scale_wave (per spectral channel, fit across fibres),
          shown only where sky lines exist, with the count of skyline pixels per channel.
 
       2. {file}_skyline_scaling_fiber.png
-         Fibre-dependent scale term scale_fiber (per fibre, fit across wavelengths on the wavelength-scaled sky), 
-         with the count of skyline pixels per fibre.
+         Fibre-dependent scale term scale_fiber (per fibre, fit across wavelengths on the wavelength-scaled sky),
+         object-bundle fibres only, with the count of skyline pixels per fibre.
 
       3. {file}_skyline_subtraction.png
          The applied combined scale (scale_fiber x scale_wave) and its effect: 
@@ -2431,17 +2431,19 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     plt.close(fig)
  
     # ------------------------------------------------------------------ #
-    # 2) fibre-dependent scale term (scale_fiber)
+    # 2) fibre-dependent scale term (scale_fiber) -- object-bundle fibres only
     # ------------------------------------------------------------------ #
-    scale_fiber_plot = np.where(n_line_per_fibre > 0, scale_fiber, np.nan)
+    obj_fibre_idx = fibre_idx[obj_bundle_mask]
+    scale_fiber_plot = np.where(n_line_per_fibre > 0, scale_fiber, np.nan)[obj_bundle_mask]
+    n_line_per_fibre_obj = n_line_per_fibre[obj_bundle_mask]
 
     fig, axs = plt.subplots(2, 1, figsize=(8, 4), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [4, 1]})
 
-    axs[0].plot(fibre_idx, scale_fiber_plot, lw=1.2, color='k')
+    axs[0].plot(obj_fibre_idx, scale_fiber_plot, lw=1.2, color='k')
     axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
     axs[0].set_ylabel('scale factor', fontsize=12, labelpad=10)
     axs[0].set_title('fibre-dependent skyline scale', fontsize=14, pad=15)
-    axs[1].fill_between(fibre_idx, 0, n_line_per_fibre, step='mid', color='grey', alpha=0.3)
+    axs[1].fill_between(obj_fibre_idx, 0, n_line_per_fibre_obj, step='mid', color='grey', alpha=0.3)
     axs[1].set_ylabel('# of skyline\npixels', fontsize=11, labelpad=10)
     axs[1].set_xlabel('fiber #', fontsize=12, labelpad=12)
     axs[1].set_xlim(0, n_fibre - 1)
@@ -2499,7 +2501,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
 
 
 # ---------------------------------------------------------------------------- #
-def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask):
+def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask, obj_bundle_mask):
 # ---------------------------------------------------------------------------- #
     '''
     plotting the residual intensity of all skylines for each fiber in the science frame after subtraction.
@@ -2509,20 +2511,18 @@ def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask):
     # residual flux in skyline regions of science image
     sci_skyline_region_flux = sci_cs_image_skysub * skyline_mask
 
-    n_fibres = sci_skyline_region_flux.shape[0]
+    fibre_idx = np.arange(sci_skyline_region_flux.shape[0])[obj_bundle_mask]
 
-    mean_resid = np.zeros(n_fibres, dtype=float)
-    median_resid = np.zeros(n_fibres, dtype=float)
+    mean_resid = np.zeros(fibre_idx.size, dtype=float)
+    median_resid = np.zeros(fibre_idx.size, dtype=float)
 
-    for i in range(n_fibres):
+    for j, i in enumerate(fibre_idx):
         # sky sub intensity for i-th fiber
-        #       for all skyline spectral regions 
+        #       for all skyline spectral regions
         vals = sci_skyline_region_flux[i, skyline_mask[i, :] > 0]
 
-        mean_resid[i] = np.mean(vals)
-        median_resid[i] = np.median(vals)
-
-    fibre_idx = np.arange(n_fibres)
+        mean_resid[j] = np.mean(vals)
+        median_resid[j] = np.median(vals)
 
     plt.figure(figsize=(8, 5))
     plt.title('sky-subtracted skyline region of science image', fontsize=15, pad=15)
