@@ -35,8 +35,7 @@
 		"nearkr": "nirwals/line_list/ArKrNe_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
 		"nekrar": "nirwals/line_list/ArKrNe_{wavelength_key}_GA{grtilt:.1f}_CA{camang:.1f}.txt",
 		"sky": "nirwals/line_list/SkyLines.txt",
-		"sky_blended": "nirwals/line_list/SkyLine_blended.txt",
-		"telluric": "nirwals/line_list/Telluric_regions.txt"
+		"sky_blended": "nirwals/line_list/SkyLine_blended.txt"
 	},
     "line_lists_base": {
 		"ar": "nirwals/line_list/Ar_{wavelength_key}.txt",
