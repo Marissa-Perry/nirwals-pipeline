@@ -7,7 +7,7 @@
         "b. The trace[fit] entry in nirwals/science_reduce.json must be the same as the trace[fit] entry in nirwals/science_prepare.json!"
     ],
 
-	"output": {"dir": "", "plot_wavelength_fit": 1, "plot_zero_points_fit": 1, "plot_continuum_fit": 0},
+	"output": {"dir": "", "plot_wavelength_fit": 1, "plot_zero_points_fit": 1, "plot_continuum_fit": 1, "plot_fibre_extraction": 1},
     "product": {"dir": ""},
 
     "reduce_arc": {"exp_type": "Arc"},
@@ -196,7 +196,7 @@
         },
         "sci": {
             "sigma_clip": {},
-            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 2, "niter": 10},
+            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 1.5, "niter": 10},
             "notes": [
                 "a. row masking is done for the determined row mask which takes into account the curvature of the rectification;",
                 "b. all row masks constitute 'image_mask' which is used to mask columns in spectral channels fit"
@@ -370,19 +370,21 @@
             "figsize": [16, 9],
             "title": "",
             "title_frmt": "Continuum fit - {file}: Function = {function}, Order = {order}, {tag} id = {id}",
-            "title_ypos": -0.1,
+            "title_ypos": 1.02,
             "xlabel": "Column [pixel]",
             "ylabel": "Relative flux",
+            "label_fontsize": 15,
+            "labelpad": 15,
             "xlim": {"min": 0, "max": 0, "min_factor": 1.0, "max_factor": 1.0},
-            "ylim": {"min": 0, "max": 0, "min_factor": -0.05, "max_factor": 1.025},
-            "spectrum": {"label": "Spectrum", "linestyle": "-", "linewidth": 1.0, "color": "black"},
-            "clip": {"label": "Spectrum - clipped", "linestyle": "-", "linewidth": 1.0, "color": "red"},
-            "fit": {"label": "Continuum fit", "linestyle": "--", "linewidth": 1.0, "color": "blue"},
-            "subtract": {"label": "Spectrum: Continuum fit subtracted", "linestyle": "-", "linewidth": 1.0, "color": "green"},
-            "zero_line": {"linestyle": "--", "linewidth": 0.5, "color": "black"},
-            "legend_order": [0, 1, 2, 3],
-            "legend": {"loc": "upper right"},
-            "save": 0,
+            "ylim": {"min": 0, "max": 0, "min_factor": -0.5, "max_factor": 2.5},
+            "spectrum": {"label": "Spectrum", "linestyle": "-", "linewidth": 1.0, "color": "yellow"},
+            "clip": {"label": "Spectrum - clipped", "linestyle": "-", "linewidth": 1.0, "color": "orange"},
+            "fit": {"label": "Continuum fit", "linestyle": "--", "linewidth": 2.5, "color": "blue"},
+            "subtract": {"label": "Continuum subtracted", "linestyle": "-", "linewidth": 1.0, "color": "grey"},
+            "zero_line": {"linestyle": "--", "linewidth": 0.5, "color": "grey"},
+            "legend_order": [1, 2, 3, 4, 0],
+            "legend": {"loc": "upper right", "fontsize": 15},
+            "save": 1,
             "show": 0
         }
     }

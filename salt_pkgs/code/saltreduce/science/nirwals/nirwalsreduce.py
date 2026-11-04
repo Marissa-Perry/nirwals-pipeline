@@ -970,7 +970,7 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     sky_bundle_mask = np.array([traces[fid]['type'] == 'sky' for fid in fibres.keys()])
 
     # Fit and subtract continuum, using the sky exposure's own skyline mask for the science frame
-    cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log)
+    cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log, sky_bundle_mask)
     # Write new fits file: continuum fit
     write_new_fits(hdu, cf_image, None, '', 'cf', work, log)
     # Write new fits file: continuum subtracted
@@ -984,12 +984,12 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     # Check if exposure type is 'science'
     if work['exp_type'] == 'science':
         # Subtract sky
-        sci_image, sci_image_with_cont, sky_scaled, sky_cf_image, continuum_scale_variance = subtract_sky(
+        sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image, continuum_scale_variance = subtract_sky(
             hdu, cf_image, cs_image, sf_image, sky_bundle_mask, variance_image, work, log)
-        skycorr_ss = sky_scaled
+        skycorr_ss = sky_cs_scaled
         skycorr_ssc = skycorr_ss
-        if sky_scaled is not None and sky_cf_image is not None:
-            skycorr_ssc = sky_scaled + sky_cf_image
+        if sky_cs_scaled is not None and sky_cf_image is not None:
+            skycorr_ssc = sky_cs_scaled + sky_cf_image
         # Add the continuum-scaling fit's own uncertainty (still doesn't include the sky exposure's own shot noise)
         variance_image_sky_sub = variance_image
         if continuum_scale_variance is not None:
@@ -1577,7 +1577,7 @@ def fit_and_subtract_continuum_for_fibre(key, id, work, log):
     return farr
 
 # ---------------------------------------------------------------------------- #
-def fit_and_subtract_continuum_for_image(hdu, key, image, work, log):
+def fit_and_subtract_continuum_for_image(hdu, key, image, work, log, sky_bundle_mask):
 # ---------------------------------------------------------------------------- #
 
     # Add message to log
@@ -1597,6 +1597,14 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log):
     # broadcast skyline mask (True = on a skyline) to the full image shape
     skyline_image_mask = np.broadcast_to(work['skyline_mask'], (rows, cols))
 
+    # Fibres whose continuum fit gets its own diagnostic plot -- the brightest object-bundle fibres
+    n_diagnostic_fibers = 10
+    brightness = np.nanmedian(np.where(image > 0, image, np.nan), axis=1)
+    brightness = np.where(np.isfinite(brightness) & ~sky_bundle_mask, brightness, -np.inf)
+    diagnostic_rows = set(np.argsort(brightness)[-n_diagnostic_fibers:])
+    if work['output']['plot_continuum_fit']:
+        log.message('   - diagnostic plots for continuum fit', with_header=False)
+
     # Loop for image rows...
     for i in range(rows):
 
@@ -1612,12 +1620,14 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log):
         image_fit_mask = edges_image_mask & ~skyline_image_mask
         row_fit_mask = edges_row_mask & ~skyline_row_mask
 
+        plot = i in diagnostic_rows
+
         # Fit continuum
-        cf = fit_continuum(key, 'row', i + 1, xarr, yarr, row_fit_mask, work, log)
+        cf = fit_continuum(key, 'row', i + 1, xarr, yarr, row_fit_mask, work, log, plot=plot)
 
         # if unable to dertermine continuum with skylines masked, try again with just edge mask
         if cf is None:
-            cf = fit_continuum(key, 'row', i + 1, xarr, yarr, edges_row_mask, work, log)
+            cf = fit_continuum(key, 'row', i + 1, xarr, yarr, edges_row_mask, work, log, plot=plot)
         # if it still fails ...
         if cf is None:
             continue
@@ -1641,7 +1651,7 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log):
     return cf_image, cs_image
     
 # ---------------------------------------------------------------------------- #
-def fit_continuum(key, tag, id, xarr, yarr, mask, work, log, yerr=None):
+def fit_continuum(key, tag, id, xarr, yarr, mask, work, log, yerr=None, plot=False):
 # ---------------------------------------------------------------------------- #
 
     # Check if flux must be sigma clipped
@@ -1668,8 +1678,9 @@ def fit_continuum(key, tag, id, xarr, yarr, mask, work, log, yerr=None):
                     with_header=False)
         return None
 
-    # Plot continuum fit (if needed)
-    plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, work, log)
+    # Plot continuum fit
+    if plot:
+        plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, mask, work, log)
     return cf
 
 # ---------------------------------------------------------------------------- #
@@ -2033,8 +2044,8 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     scaling_image_masked[scaling_image_masked < 1e-2] = 1.
 
     # Scale the sky continuum-subtracted image and subtract it from the science image
-    sky_scaled = sky_cs_image * scaling_image_masked
-    sci_image = sci_cs_image - sky_scaled  # skylines subtracted !
+    sky_cs_scaled = sky_cs_image * scaling_image_masked
+    sci_image = sci_cs_image - sky_cs_scaled  # skylines subtracted !
 
     # Scale sky-continuum in the sky frame up to the science frame using sky-bundle fibres
     cfg = work['sky_scaling']['continuum']
@@ -2042,22 +2053,22 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     is_bright_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in cfg['skip_for_objects'])   # leaked starlight would inflate the ratio, not reflect real sky
     scale_sky_cont = cfg['enable'] and not is_bright_standard and sky_bundle_mask.sum() >= cfg['min_sky_fibers']
 
-    obj_fit_cont = sky_fit_cont = med_obj_raw = med_sky_raw = None
+    obj_fit_cont = sky_fit_cont = med_sci_sky_bundle = med_sky_sky_bundle = None
     continuum_scale_variance = np.zeros_like(sci_cf_image, dtype=np.float32)   # fit uncertainty on the continuum correction, added to the output variance
 
     if scale_sky_cont:
         # sky-bundle frames
-        raw_obj_bundle = (sci_cs_image + sci_cf_image)[sky_bundle_mask]   # (n_sky, cols)
-        raw_sky_bundle = (sky_cs_image + sky_cf_image)[sky_bundle_mask]   # (n_sky, cols)
+        raw_sci_sky_bundle = (sci_cs_image + sci_cf_image)[sky_bundle_mask]   # (n_sky, cols)
+        raw_sky_sky_bundle  = (sky_cs_image + sky_cf_image)[sky_bundle_mask]   # (n_sky, cols)
 
         # Median sky-bundle spectrum per frame
-        valid_edge = ((raw_obj_bundle != 0) & (raw_sky_bundle != 0)
-                      & np.isfinite(raw_obj_bundle) & np.isfinite(raw_sky_bundle))
+        valid_edge = ((raw_sci_sky_bundle != 0) & (raw_sky_sky_bundle != 0)
+                      & np.isfinite(raw_sci_sky_bundle) & np.isfinite(raw_sky_sky_bundle))
         has_cols = valid_edge.any(axis=0)
-        med_obj_raw = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
-        med_sky_raw = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
-        med_obj_raw[has_cols] = np.nanmedian(np.where(valid_edge[:, has_cols], raw_obj_bundle[:, has_cols], np.nan), axis=0)
-        med_sky_raw[has_cols] = np.nanmedian(np.where(valid_edge[:, has_cols], raw_sky_bundle[:, has_cols], np.nan), axis=0)
+        med_sci_sky_bundle = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
+        med_sky_sky_bundle = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
+        med_sci_sky_bundle[has_cols] = np.nanmedian(np.where(valid_edge[:, has_cols], raw_sci_sky_bundle[:, has_cols], np.nan), axis=0)
+        med_sky_sky_bundle[has_cols] = np.nanmedian(np.where(valid_edge[:, has_cols], raw_sky_sky_bundle[:, has_cols], np.nan), axis=0)
 
         # Variance of each median, from the two exposures' own per-fiber extraction variance -- weights the fits below
         fit_mask_1d = has_cols & continuum_interline_col
@@ -2072,8 +2083,8 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
             sky_yerr = np.sqrt(med_sky_var) if np.any(np.isfinite(med_sky_var[fit_mask_1d])) else None
 
         # Continuum fit of the median sky-bundle spectrum, per exposure -- skylines excluded
-        obj_cf = fit_continuum('sky_bundle', 'median', 'science', xarr, med_obj_raw, fit_mask_1d, work, log, yerr=obj_yerr)
-        sky_cf = fit_continuum('sky_bundle', 'median', 'sky', xarr, med_sky_raw, fit_mask_1d, work, log, yerr=sky_yerr)
+        obj_cf = fit_continuum('sky_bundle', 'median', 'science', xarr, med_sci_sky_bundle, fit_mask_1d, work, log, yerr=obj_yerr)
+        sky_cf = fit_continuum('sky_bundle', 'median', 'sky', xarr, med_sky_sky_bundle, fit_mask_1d, work, log, yerr=sky_yerr)
         scale_sky_cont = (obj_cf is not None) and (sky_cf is not None)
 
         # cf(xarr) below extrapolates past the fitted columns; outside this range it's unconstrained, not real sky
@@ -2134,11 +2145,11 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image_scaled)
 
     # Diagnostic plots of the skyline and sky-continuum correction terms and their effect on the subtraction
-    skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled, obj_bundle_mask)
+    skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask)
     skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask, obj_bundle_mask=obj_bundle_mask)
     if scale_sky_cont:
         sky_cf_obj_mean_scaled = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
-        sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw, med_sky_raw,
+        sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_sci_sky_bundle, med_sky_sky_bundle,
                                     obj_fit_cont, sky_fit_cont, method, scale_curve, sky_cf_obj_mean, sky_cf_obj_mean_scaled,
                                     sci_cf_obj_mean)
     else:
@@ -2165,7 +2176,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         comment = 'Image has been sky (line + continuum) subtracted; continuum scaling disabled, used unscaled sky continuum'
     hdu['Primary'].header['SKYSUB'] = (value, comment)
 
-    return sci_image, sci_image_with_cont, sky_scaled, sky_cf_image_scaled, continuum_scale_variance
+    return sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image_scaled, continuum_scale_variance
 
 
 # ---------------------------------------------------------------------------- #
@@ -2318,7 +2329,7 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, science_spectral_su
     return
 
 # ---------------------------------------------------------------------------- #
-def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_scaled, obj_bundle_mask):
+def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask):
 # ---------------------------------------------------------------------------- #
     '''
     Diagnostic plots for the (residual-minimising) skyline scaling.
@@ -2423,7 +2434,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
  
     # sky-subtraction results, before vs after applying the scale
     sci_image_unscaled_sub = sci_cs_image - sky_cs_image
-    sci_image_scaled_sub = sci_cs_image - sky_scaled
+    sci_image_scaled_sub = sci_cs_image - sky_cs_scaled
     both = np.concatenate([sci_image_unscaled_sub.ravel(), sci_image_scaled_sub.ravel()])
     r0, r1 = np.nanpercentile(both, [1, 90])
  
@@ -3433,14 +3444,10 @@ def plot_zero_points_fit(ws, work, log):
     return
 
 # ---------------------------------------------------------------------------- #
-def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, work, log):
+def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, mask, work, log):
 # ---------------------------------------------------------------------------- #
 
     if not work['output']['plot_continuum_fit']: return
-
-    # Add message to log
-    msg = ' - plot continuum fit: {0} {1}'.format(tag.capitalize(), id)
-    log.message(msg, with_header=False)
 
     # Set plotting dictionary: continuum_fit
     plot_dict = work['plotting']['continuum_fit'].copy()
@@ -3450,13 +3457,22 @@ def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, work, log):
     # Set subplot
     ax = plt.subplot(1, 1, 1)
 
+    # highlight columns excluded from the fit (e.g. skylines), same style as sky_continuum_scaling_plot
+    change = np.diff(np.concatenate([[0], (~mask).astype(int), [0]]))
+    starts = xarr[np.where(change == 1)[0]]
+    ends = xarr[np.where(change == -1)[0] - 1]
+    for i, (s, e) in enumerate(zip(starts, ends)):
+        ax.axvspan(s, e, color='grey', alpha=0.15, zorder=0, label='Masked' if i == 0 else None)
+
+    cf_vals = cf(xarr)
+
     # Update xy limits in plotting dictionary:
     # - xlim
     plot_dict['xlim']['min'] = xarr.min()
     plot_dict['xlim']['max'] = xarr.max()
-    # - ylim
-    plot_dict['ylim']['min'] = yarr.max()
-    plot_dict['ylim']['max'] = yarr.max()
+    # - ylim: zoom to the continuum fit's own range, not the raw (noisier) spectrum's
+    plot_dict['ylim']['min'] = cf_vals.min()
+    plot_dict['ylim']['max'] = cf_vals.max()
     # Set plot axis properties
     set_plot_axis_properties(ax, **plot_dict)
 
@@ -3465,9 +3481,9 @@ def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, work, log):
     # Plot spectrum - clipped
     ax.plot(xarr, ysig, **plot_dict['clip'])
     # Plot continuum fit
-    ax.plot(xarr, cf(xarr), **plot_dict['fit'])
+    ax.plot(xarr, cf_vals, **plot_dict['fit'])
     # Plot spectrum: continuum fit subtracted
-    ax.plot(xarr, yarr - cf(xarr), **plot_dict['subtract'])
+    ax.plot(xarr, yarr - cf_vals, **plot_dict['subtract'])
     # Plot horizontal zero point line
     ax.axhline(y=0, **plot_dict['zero_line'])
     # Set legend
@@ -3480,10 +3496,17 @@ def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, work, log):
                   'id': id}
     # Set title
     title = plot_dict['title_frmt'].format(**title_dict)
-    plt.title(title, fontsize=11, y=plot_dict['title_ypos'])
+    plt.title(title, fontsize=20, y=plot_dict['title_ypos'], pad=15)
 
-    # Show figure (always)
-    plt.show()
+    # Save figure
+    if plot_dict['save']:
+        plot_dir = get_plot_dir(work, 'continuum_fitting')
+        png_file = '{0}_continuum_fit_{1}_{2}.png'.format(work['file'], tag, id)
+        filepath = os.path.join(plot_dir, png_file)
+        plt.savefig(filepath, dpi=180, format='png', bbox_inches='tight')
+    # Show figure
+    if plot_dict['show']:
+        plt.show()
     # Clear current figure
     plt.clf()
     # Close current figure window (if any)
@@ -3496,9 +3519,9 @@ def set_plot_axis_properties(ax, **plot_dict):
 # ---------------------------------------------------------------------------- #
 
     # Set x label
-    if plot_dict['xlabel']: ax.set_xlabel(plot_dict['xlabel'])
+    if plot_dict['xlabel']: ax.set_xlabel(plot_dict['xlabel'], fontsize=plot_dict.get('label_fontsize'), labelpad=plot_dict.get('labelpad'))
     # Set y label
-    if plot_dict['ylabel']: ax.set_ylabel(plot_dict['ylabel'])
+    if plot_dict['ylabel']: ax.set_ylabel(plot_dict['ylabel'], fontsize=plot_dict.get('label_fontsize'), labelpad=plot_dict.get('labelpad'))
     # Set x limits
     xmin = plot_dict['xlim']['min'] * plot_dict['xlim']['min_factor']
     xmax = plot_dict['xlim']['max'] * plot_dict['xlim']['max_factor']

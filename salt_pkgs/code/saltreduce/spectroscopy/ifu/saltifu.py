@@ -670,10 +670,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
     # log.message(' - extract fibres: method = {0}'.format(method), with_header=False)
     print(' - extract fibres: method = {0}'.format(method))
 
-    ###### DEBUGGING ########
-    fiber_to_debug = '050'
     plot_all_fibre_extractions = bool(work['debug'])
-    #########################
 
     # Initialise extracted fibres, good pixels, and variance dictionaries
     fibres, good_pixels, variances = {}, {}, {}
@@ -681,39 +678,11 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
     # Loop for fibre traces...
     for id, fibre in traces.items():
 
-        ###### DEBUGGING ########
-        if id != fiber_to_debug:
-            cols_to_debug = []
-        else:
-            cols_to_debug = [192, 1110, 1800]
-        #########################
-
         # Set fibre row range and oversampled 'valid' aperture mask
         r_min, r_max, valid = set_fibre(fibre, work)
 
         # Good-pixel count per wavelength bin
         gpmarr = set_fibre_array(gpm, r_min, r_max, valid, work)
-
-        ######################## DEBUG PLOT  #################################
-        if len(cols_to_debug) != 0 and flt is not None and dark_rate is not None:
-            # aperture weights for sub-pixel precision
-            n_rows = r_max - r_min            # number of pixels contributing to the fiber
-            n_sub_rows = work['row_repeat']   # number of sub-pixels contributing to the fiber
-            n_cols = valid.shape[-1]          # column (wavelength) pixels
-            aperture_weight = valid.reshape(n_rows, n_sub_rows, n_cols).mean(axis=1)  # averaging across sub-pixels to get sub-pixel precision on detector pixel resolution
-
-            # extract for optimal
-            sci_2D = sci_unmasked[r_min:r_max, :].copy()
-            gpm_2D = gpm[r_min:r_max, :].copy()
-            flt_2D = flt[r_min:r_max, :].copy()
-            dark_2D = dark_rate[r_min:r_max, :].copy()
-
-            # extract for boxcar
-            sciarr = set_fibre_array(sci, r_min, r_max, valid, work)
-            fltarr = set_fibre_array(flt, r_min, r_max, valid, work)
-
-            plot_extraction_comparison(method, id, cols_to_debug, sci_2D, gpm_2D, flt_2D, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_2D, exptime, smooth_params, work)
-        #######################################################################
 
         # =========================== BOXCAR ===========================
         if method == 'boxcar':
@@ -754,10 +723,15 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
         # Store good-pixel count for this fibre
         good_pixels[id] = gpmarr
 
-        ######################## PER-FIBRE EXTRACTION PLOT  ###################
-        if plot_all_fibre_extractions:
-            plot_fibre_extraction(work, id, fibre.get('type', 'object'), fibres[id], gpmarr, variance=variances[id])
-        #########################################################################
+    # diagnostic plots for the brightest object-bundle fibres' extracted spectra
+    if work['output'].get('plot_fibre_extraction'):
+        n_diagnostic_fibers = 10
+        obj_ids = [id for id, fibre in traces.items() if fibre.get('type', 'object') != 'sky']
+        brightness = {id: np.nanmedian(np.where(fibres[id] > 0, fibres[id], np.nan)) for id in obj_ids}
+        diagnostic_ids = sorted(brightness, key=lambda id: brightness[id] if np.isfinite(brightness[id]) else -np.inf)[-n_diagnostic_fibers:]
+        log.message('   - diagnostic plots for fibre extraction', with_header=False)
+        for id in diagnostic_ids:
+            plot_fibre_extraction(work, id, traces[id].get('type', 'object'), fibres[id], good_pixels[id], variance=variances[id])
 
     return fibres, good_pixels, variances
 
