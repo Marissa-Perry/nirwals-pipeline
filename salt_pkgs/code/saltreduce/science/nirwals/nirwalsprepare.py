@@ -192,7 +192,7 @@ def generate_bpm(obs_date, log, **kwargs):
     dark_groups = {}
     for raw_file in raw_files:
         hdr = fits.getheader(raw_file, PRIMARY)
-        if hdr.get('OBSTYPE') != 'Dark':
+        if hdr.get('EXPTYPE') != 'Dark':
             continue
         dark_groups.setdefault(hdr['EXPTIME'], []).append(raw_file)
 
