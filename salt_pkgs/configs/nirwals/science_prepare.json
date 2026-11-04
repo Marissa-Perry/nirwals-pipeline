@@ -40,7 +40,7 @@
             "flat_illum_frac": 0.2
         },
         "crosstalk": {
-            "isolation_radius": 3,
+            "isolation_radius": 5,
             "correct_neighbors": {
                 "apply": true,
                 "alpha_asym_3": 0.01,
