@@ -1685,20 +1685,6 @@ def fit_spectral_channels(image, work, log):
     # Set 1D fitting dictionary
     fit = work['spectral_channels']['fit']
 
-    ####### DEBUG ######
-    wav_grid = work['we']
-
-    wmin_Yband = 9874   # [A]
-    wmax_Yband = 9904   # [A]
-    sample_wavs_Yband = np.linspace(wmin_Yband, wmax_Yband, 5)  # evenly spaced spectral channel wavelengths
-    diagnostic_cols_Yband = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs_Yband])  # wavelengths to column indices
-    
-    wmin_Jband = 12650   # [A]
-    wmax_Jband = 12750   # [A]
-    sample_wavs_Jband = np.linspace(wmin_Jband, wmax_Jband, 5)  # evenly spaced spectral channel wavelengths
-    diagnostic_cols_Jband = np.array([np.argmin(np.abs(wav_grid - w)) for w in sample_wavs_Jband])  # wavelengths to column indices
-    #####################
-
     # Loop for columns...
     for j in range(work['cols']):
 
@@ -1722,11 +1708,6 @@ def fit_spectral_channels(image, work, log):
         sf = Fit1D(work['s'][cm], farr[cm], **fit)
         # Set spectral fit in spectral fit image array
         sf_image[:, j][cm] = sf(work['s'])[cm]
-
-        ####### DEBUG ######
-        if (j in diagnostic_cols_Yband) or (j in diagnostic_cols_Jband):
-            spec_channel_fit_diagnostic_plot(work, input_flux=farr,fit_flux=sf(work['s']),mask=cm,col=j)
-        #####################
     
     # Set NaN to 1
     sf_image[np.isnan(sf_image)] = 1.
@@ -1773,12 +1754,9 @@ def spec_channel_fit_diagnostic_plot(work, input_flux, fit_flux, mask, col):
     fluxes_fit = fit_flux[mask]
 
     plt.figure(figsize=(8, 5))
-
     plt.plot(fluxes, fibers, '.', label='input')
     plt.plot(fluxes_fit, fibers, '-', label='spectral channel fit')
-
     wav = work['we'][col]
-
     plt.title(f'column {col}, wavelength {wav:.2f} A')
     plt.xlabel('flux', fontsize=12, labelpad=15)
     plt.ylabel('fiber #', fontsize=12, labelpad=15)
