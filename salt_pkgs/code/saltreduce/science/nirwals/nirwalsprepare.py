@@ -157,10 +157,10 @@ def generate_bpm(obs_date, log, **kwargs):
     bpm_thresh_sigma = config['bpm']['threshold']['sigma']  # using threshold set in config file
     allow_existing = config['bpm'].get('allow_existing', False)
 
-    # set once the BPM is generated/loaded below, for the correction loop further down
-    correct_neighbors = False
-    alpha_asym_3 = None
-    alpha_asym_1 = None
+    # crosstalk config
+    correct_neighbors = config['bpm'].get('crosstalk', {}).get('correct_neighbors', {}).get('apply', True)
+    alpha_asym_3 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_3']
+    alpha_asym_1 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_1']
     measured_3 = None
 
     # always check this night's own work directory for a pre-generated BPM
@@ -185,12 +185,37 @@ def generate_bpm(obs_date, log, **kwargs):
             log.message('   - existing BPM unreadable ({0}); generating fresh instead.'.format(e), with_header=False)
             use_existing = False
 
+    # raw darks, grouped by EXPTIME and mean-combined
+    prefix = kwargs['params']['raw_prefix']
+    raw_wildcard = os.path.join(work_dir, '{0}/raw'.format(folder), '*reduced.fits')
+    raw_files = sorted(f for f in glob.glob(raw_wildcard) if not duplicate(f))
+    dark_groups = {}
+    for raw_file in raw_files:
+        hdr = fits.getheader(raw_file, PRIMARY)
+        if hdr.get('OBSTYPE') != 'Dark':
+            continue
+        dark_groups.setdefault(hdr['EXPTIME'], []).append(raw_file)
+
+    combined_darks = {exptime: np.mean([fits.getdata(f, SCI) for f in group_files], axis=0)
+                       for exptime, group_files in dark_groups.items()}
+
+    longest_exptime = max(combined_darks) if combined_darks else None
+    longest_dark_data = combined_darks.get(longest_exptime)
+    longest_dark_med = longest_dark_sig = None
+    if longest_dark_data is not None:
+        finite = np.isfinite(longest_dark_data)
+        longest_dark_med = np.median(longest_dark_data[finite])
+        longest_dark_sig = np.percentile(longest_dark_data[finite], 84) - longest_dark_med
+
+    # dark product paths 
+    dark_wildcard = os.path.join(prd_dir, '{0}{1}Dark*.fits'.format(prefix, obs_date))
+    dark_files = sorted(f for f in glob.glob(dark_wildcard) if not duplicate(f))
+    product_file_by_exptime = {fits.getheader(f, PRIMARY)['EXPTIME']: f for f in dark_files}
+    longest_dark_file = product_file_by_exptime.get(longest_exptime)
+
     if not use_existing:
 
         log.message('   - generating BPM.')
-
-        # instrument (raw) file prefix — needed to locate master dark/flat files
-        prefix = kwargs['params']['raw_prefix']
 
         # ---------- FLAGS union: from every individual reduced exposure ----------
         # per-exposure ramp-fit flags live only on the individual frames, so read
@@ -210,13 +235,10 @@ def generate_bpm(obs_date, log, **kwargs):
                 flag_union[flags == 1] = 1
 
         # ---------- locate combined masters ----------
-        # dark product paths only, for bookkeeping -- their SCI data isn't read here since the
-        # per-file correction loop below overwrites it in place on every run
-        dark_wildcard = os.path.join(prd_dir, '{0}{1}Dark*.fits'.format(prefix, obs_date))
-        dark_files = sorted(f for f in glob.glob(dark_wildcard) if not duplicate(f))
         if len(dark_files) == 0:
             raise RuntimeError(f'No combined dark files found for {obs_date}')
-        product_file_by_exptime = {fits.getheader(f, PRIMARY)['EXPTIME']: f for f in dark_files}
+        if len(dark_groups) == 0:
+            raise RuntimeError(f'No raw dark exposures found for {obs_date}')
 
         flat_wildcard = os.path.join(prd_dir, '{0}{1}Flat*.fits'.format(prefix, obs_date))
         flat_files = sorted(f for f in glob.glob(flat_wildcard) if not duplicate(f))
@@ -253,32 +275,10 @@ def generate_bpm(obs_date, log, **kwargs):
             plt.close()
 
         # ---------- component 2: master darks ------------
-        # rebuilt fresh from raw exposures, grouped by EXPTIME and mean-combined -- the product
-        # *Dark*.fits files get IPC-corrected in place later in this function, so a second run
-        # can't use them as calibration input without compounding that correction
-        raw_wildcard = os.path.join(work_dir, '{0}/raw'.format(folder), '*reduced.fits')
-        raw_files = sorted(f for f in glob.glob(raw_wildcard) if not duplicate(f))
-        dark_groups = {}
-        for raw_file in raw_files:
-            hdr = fits.getheader(raw_file, PRIMARY)
-            if hdr.get('OBSTYPE') != 'Dark':
-                continue
-            dark_groups.setdefault(hdr['EXPTIME'], []).append(raw_file)
-        if len(dark_groups) == 0:
-            raise RuntimeError(f'No raw dark exposures found for {obs_date}')
-
         bpm_dark = np.zeros(bpm.shape, dtype=bool)
-        # raw data + background stats from the longest-exptime dark (component 4 input)
-        longest_dark_data = None
-        longest_dark_file = None
-        longest_dark_med = None
-        longest_dark_sig = None
-        longest_exptime = -1
-        longest_n_frames = None
         plot_dark = None   # arrays kept for the longest-exposure diagnostic only
 
-        for exptime, group_files in dark_groups.items():
-            d = np.mean([fits.getdata(f, SCI) for f in group_files], axis=0)
+        for exptime, d in combined_darks.items():
             finite = np.isfinite(d)
 
             med = np.median(d[finite])
@@ -293,44 +293,11 @@ def generate_bpm(obs_date, log, **kwargs):
             bad_dark_perc = 100 * flagged.sum() / finite.sum()
             log.message('   - dark BPM: exptime={0}s, {1:.1f}% flagged'.format(exptime, bad_dark_perc), with_header=False)
 
-            # track the longest exposure's own data/stats separately from the union
-            if exptime > longest_exptime:
-                longest_exptime = exptime
-                longest_dark_data = d
-                longest_dark_med = med
-                longest_dark_sig = sig
-                longest_n_frames = len(group_files)
-
             # retain only the longest exposure (the most stressing case) for plotting
             if plot_dark is None or exptime > plot_dark['exptime']:
                 plot_dark = dict(exptime=round(exptime), data=d[finite], med=med, upper=upper, lower=lower, perc=bad_dark_perc)
 
-        longest_dark_file = product_file_by_exptime.get(longest_exptime)
         bpm[bpm_dark] = 1.
-
-        # ---------- component 4: inter-pixel crosstalk correction ----------
-        log.message('   - crosstalk:', with_header=False)
-        correct_neighbors = config['bpm'].get('crosstalk', {}).get('correct_neighbors', {}).get('apply', True)
-        alpha_asym_3 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_3']
-        alpha_asym_1 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_1']
-        if correct_neighbors:
-            measured_3 = np.zeros(bpm.shape, dtype=bool)
-            isolation_radius = config['bpm']['crosstalk'].get('isolation_radius', 5)
-            # a pixel's own alpha is measured only where it's an isolated hot pixel -- the default alpha covers everywhere else
-            per_pixel_cfg = config['bpm']['crosstalk']['correct_neighbors'].get('per_pixel_alpha', {})
-            if per_pixel_cfg.get('apply', True):
-                min_measured = per_pixel_cfg['min_measured']
-                # isolated hot pixels for calibration are flagged at the same threshold as the BPM's own dark-current component
-                alpha_threshold = longest_dark_med + bpm_thresh_sigma * longest_dark_sig
-                hot_pixel, alpha_candidates, nearby_count = isolated_hot_pixels(longest_dark_data, alpha_threshold, radius=isolation_radius)
-                alpha_asym_3, alpha_asym_1, alpha_sym, measured_3, measured_1, used_asym_3, used_asym_1 = build_alpha_maps(longest_dark_data, longest_dark_med, hot_pixel, alpha_candidates, nearby_count, alpha_asym_3, alpha_asym_1, min_measured=min_measured)
-                if measured_3.sum() >= min_measured:
-                    log.message('      - measured alpha for {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius): alpha_asym_3={3:.4f}, alpha_asym_1={4:.4f}'.format(measured_3.sum(), bpm_thresh_sigma, isolation_radius, used_asym_3, used_asym_1), with_header=False)
-                else:
-                    log.message('      - {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius) below config threshold of >{3} pixels. Using default config values alpha_asym_3={4:.4f}, alpha_asym_1={5:.4f}'.format(measured_3.sum(), bpm_thresh_sigma, isolation_radius, min_measured, used_asym_3, used_asym_1), with_header=False)
-
-                alpha_calibration_diagnostic_plot(longest_dark_data, longest_dark_med, longest_dark_sig, bpm_thresh_sigma,
-                                                   alpha_asym_3, alpha_asym_1, alpha_sym, measured_3, measured_1, used_asym_3, used_asym_1, longest_exptime, bpm_dir)
 
         # ---------- diagnostic: longest-exposure master dark only ----------
         if plot_dark is not None:
@@ -402,8 +369,29 @@ def generate_bpm(obs_date, log, **kwargs):
         # ---------- bad-pixel percentage + header comment ----------
         bad = len(bpm[bpm == 1])
         perc_bad = (bad / bpm.size) * 100
-        crosstalk_comment = f'correct_neighbors={correct_neighbors}' if correct_neighbors else 'not applied'
-        comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels. Crosstalk correction (longest-exptime hot pixels): {crosstalk_comment}.')
+        comment = (f'Bad-pixel mask generated from combined dark and flat frames of {obs_date} observation. Threshold value of {bpm_thresh_sigma} sigma results in {perc_bad:.1f}% bad pixels.')
+
+    # ---------- crosstalk calibration ----------
+    log.message('   - crosstalk:', with_header=False)
+    if correct_neighbors:
+        measured_3 = np.zeros(bpm.shape, dtype=bool)
+        if longest_dark_data is not None:
+            isolation_radius = config['bpm']['crosstalk'].get('isolation_radius', 5)
+            # a pixel's own alpha is measured only where it's an isolated hot pixel -- the default alpha covers everywhere else
+            per_pixel_cfg = config['bpm']['crosstalk']['correct_neighbors'].get('per_pixel_alpha', {})
+            if per_pixel_cfg.get('apply', True):
+                min_measured = per_pixel_cfg['min_measured']
+                # isolated hot pixels for calibration are flagged at the same threshold as the BPM's own dark-current component
+                alpha_threshold = longest_dark_med + bpm_thresh_sigma * longest_dark_sig
+                hot_pixel, alpha_candidates, nearby_count = isolated_hot_pixels(longest_dark_data, alpha_threshold, radius=isolation_radius)
+                alpha_asym_3, alpha_asym_1, alpha_sym, measured_3, measured_1, used_asym_3, used_asym_1 = build_alpha_maps(longest_dark_data, longest_dark_med, hot_pixel, alpha_candidates, nearby_count, alpha_asym_3, alpha_asym_1, min_measured=min_measured)
+                if measured_3.sum() >= min_measured:
+                    log.message('      - measured alpha for {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius): alpha_asym_3={3:.4f}, alpha_asym_1={4:.4f}'.format(measured_3.sum(), bpm_thresh_sigma, isolation_radius, used_asym_3, used_asym_1), with_header=False)
+                else:
+                    log.message('      - {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius) below config threshold of >{3} pixels. Using default config values alpha_asym_3={4:.4f}, alpha_asym_1={5:.4f}'.format(measured_3.sum(), bpm_thresh_sigma, isolation_radius, min_measured, used_asym_3, used_asym_1), with_header=False)
+                alpha_calibration_diagnostic_plot(longest_dark_data, longest_dark_med, longest_dark_sig, bpm_thresh_sigma, alpha_asym_3, alpha_asym_1, alpha_sym, measured_3, measured_1, used_asym_3, used_asym_1, longest_exptime, bpm_dir)
+        else:
+            log.message('      - no raw dark exposures available this run; using default config values alpha_asym_3={0:.4f}, alpha_asym_1={1:.4f}'.format(alpha_asym_3, alpha_asym_1), with_header=False)
 
     # diagnostic plot for bpm image
     plt.figure(figsize=(10,5))
