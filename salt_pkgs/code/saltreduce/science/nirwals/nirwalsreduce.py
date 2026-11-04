@@ -2010,6 +2010,8 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
                 sky_a_ivar = skyhdu['IVAR'].data.copy()
                 break
 
+    obj_bundle_mask = ~sky_bundle_mask   # exclude sky-bundle fibres
+
     # no sky skyline scaling for standard stars -- brightest fibers have negligible sky emission and difficult to accurately determine scale factor
     is_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in work['sky_scaling']['continuum']['skip_for_objects'])
     interline_mask = ~work['skyline_mask']
@@ -2017,7 +2019,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         resid_skyline_mask = np.zeros_like(interline_mask)
     else:
         # flag columns with excess signal which are not already in the catalog mask
-        sky_resid = np.nanmedian(sky_cs_image, axis=0)
+        sky_resid = np.nanmedian(sky_cs_image[obj_bundle_mask], axis=0)
         resid_med = np.nanmedian(sky_resid[interline_mask])
         resid_sigma = mad_std(sky_resid[interline_mask], ignore_nan=True)
         resid_skyline_mask = (sky_resid - resid_med > work['sky_scaling']['residual_sigma'] * resid_sigma) & interline_mask
@@ -2025,8 +2027,6 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
     msg = '   - skyline mask: {0} extra column(s) flagged from sky-bundle residual'.format(resid_skyline_mask.sum())
     log.message(msg, with_header=False)
-
-    obj_bundle_mask = ~sky_bundle_mask   # exclude sky-bundle fibres from the fit below -- their own scaled output is never used
 
     # Broadcast the skyline mask (True = on a skyline) to the full image shape
     rows, cols = sci_cs_image.shape
