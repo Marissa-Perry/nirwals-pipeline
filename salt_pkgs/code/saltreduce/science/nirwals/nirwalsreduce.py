@@ -976,28 +976,27 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     # Write new fits file: continuum subtracted
     write_new_fits(hdu, cs_image, None, '', 'cs', work, log)
 
-    # Fit spectral channels
-    sf_image = fit_spectral_channels(cs_image, work, log)
+    # Fit spectral channels (object-bundle fibers only)
+    sf_image = fit_spectral_channels(cs_image, work, log, sky_bundle_mask)
     # Write new fits file: spectral channels fit
     write_new_fits(hdu, sf_image, None, '', 'sf', work, log)
 
     # Check if exposure type is 'science'
     if work['exp_type'] == 'science':
-        # Subtract sky
-        sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image, continuum_scale_variance = subtract_sky(
+        # Subtract sky (object-bundle fibers only)
+        sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image, variance_image_sky_sub = subtract_sky(
             hdu, cf_image, cs_image, sf_image, sky_bundle_mask, variance_image, work, log)
         skycorr_ss = sky_cs_scaled
         skycorr_ssc = skycorr_ss
         if sky_cs_scaled is not None and sky_cf_image is not None:
             skycorr_ssc = sky_cs_scaled + sky_cf_image
-        # Add the continuum-scaling fit's own uncertainty (still doesn't include the sky exposure's own shot noise)
-        variance_image_sky_sub = variance_image
-        if continuum_scale_variance is not None:
-            variance_image_sky_sub = variance_image + crop_to_native_width(continuum_scale_variance, variance_image.shape[1])
+        # Match gpcnt_image to subtract_sky's object-bundle-only rows
+        obj_bundle_mask = ~sky_bundle_mask
+        gpcnt_image_obj = gpcnt_image[obj_bundle_mask]
         # Write new fits file: sky subtracted without continuum
-        write_new_fits(hdu, sci_image, gpcnt_image, '', 'ss', work, log, skycorr=skycorr_ss, variance_image=variance_image_sky_sub)
+        write_new_fits(hdu, sci_image, gpcnt_image_obj, '', 'ss', work, log, skycorr=skycorr_ss, variance_image=variance_image_sky_sub)
         # Write new fits file: sky subtracted with continuum
-        write_new_fits(hdu, sci_image_with_cont, gpcnt_image, '', 'ssc', work, log, skycorr=skycorr_ssc, variance_image=variance_image_sky_sub)
+        write_new_fits(hdu, sci_image_with_cont, gpcnt_image_obj, '', 'ssc', work, log, skycorr=skycorr_ssc, variance_image=variance_image_sky_sub)
 
     return
 
@@ -1684,7 +1683,7 @@ def fit_continuum(key, tag, id, xarr, yarr, mask, work, log, yerr=None, plot=Fal
     return cf
 
 # ---------------------------------------------------------------------------- #
-def fit_spectral_channels(image, work, log):
+def fit_spectral_channels(image, work, log, sky_bundle_mask):
 # ---------------------------------------------------------------------------- #
 
     # Add message to log
@@ -1695,6 +1694,8 @@ def fit_spectral_channels(image, work, log):
     sf_image = np.zeros(image.shape, dtype=np.float32)
     # Set 1D fitting dictionary
     fit = work['spectral_channels']['fit']
+    # Exclude sky-bundle fibres from the across-fibre fit -- they're not written to this product
+    obj_bundle_mask = ~sky_bundle_mask
 
     # Loop for columns...
     for j in range(work['cols']):
@@ -1703,27 +1704,29 @@ def fit_spectral_channels(image, work, log):
         farr = image[:, j].copy()
         # Set mask for column
         cm = work['image_mask'][:, j]
+        # Set mask for the fit itself: object-bundle fibres only
+        cm_fit = cm & obj_bundle_mask
         # Check if there are no columns to fit
-        if work['s'][cm].size == 0:
+        if work['s'][cm_fit].size == 0:
             # Move on!
             continue
 
         # Check nr of data points for fit against fitting order
-        if work['s'][cm].size <= fit['order']:
+        if work['s'][cm_fit].size <= fit['order']:
             # Set constant in spectral fit image array
             sf_image[:, j][cm] = farr[cm]
             # Move on!
             continue
 
         # Fit column (spectral channel) flux
-        sf = Fit1D(work['s'][cm], farr[cm], **fit)
+        sf = Fit1D(work['s'][cm_fit], farr[cm_fit], **fit)
         # Set spectral fit in spectral fit image array
         sf_image[:, j][cm] = sf(work['s'])[cm]
-    
+
     # Set NaN to 1
     sf_image[np.isnan(sf_image)] = 1.
 
-    return sf_image
+    return sf_image[obj_bundle_mask]
 
 
 # ---------------------------------------------------------------------------- #
@@ -2047,6 +2050,14 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     sky_cs_scaled = sky_cs_image * scaling_image_masked
     sci_image = sci_cs_image - sky_cs_scaled  # skylines subtracted !
 
+    # Sky exposure's own shot/read noise, scaled the same way as its flux (scale_wave/scale_fiber treated as exact)
+    if sky_a_ivar is not None:
+        # Convert sky exposure's IVAR to variance
+        sky_var_image = np.where(sky_a_ivar > 0, 1.0 / sky_a_ivar, np.inf).astype(np.float32)
+        skyline_subtraction_variance = (scaling_image_masked ** 2) * sky_var_image
+    else:
+        skyline_subtraction_variance = np.zeros_like(sci_cs_image, dtype=np.float32)
+
     # Scale sky-continuum in the sky frame up to the science frame using sky-bundle fibres
     cfg = work['sky_scaling']['continuum']
     sky_cf_image_scaled = sky_cf_image
@@ -2073,9 +2084,9 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         # Variance of each median, from the two exposures' own per-fiber extraction variance -- weights the fits below
         fit_mask_1d = has_cols & continuum_interline_col
         xarr = work['we']
-        obj_var_bundle = align_native_width(sci_variance_image, sci_cf_image.shape[1])[sky_bundle_mask]
-        med_obj_var = variance_of_median(obj_var_bundle, valid_edge)
-        obj_yerr = np.sqrt(med_obj_var) if np.any(np.isfinite(med_obj_var[fit_mask_1d])) else None
+        sci_var_sky_bundle = align_native_width(sci_variance_image, sci_cf_image.shape[1])[sky_bundle_mask]
+        med_sci_var = variance_of_median(sci_var_sky_bundle, valid_edge)
+        obj_yerr = np.sqrt(med_sci_var) if np.any(np.isfinite(med_sci_var[fit_mask_1d])) else None
         sky_yerr = None
         if sky_a_ivar is not None:
             sky_var_bundle = np.where(sky_a_ivar > 0, 1.0 / sky_a_ivar, np.inf).astype(np.float32)[sky_bundle_mask]
@@ -2131,7 +2142,8 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         ceiling_frac = (sky_cf_image_scaled > sci_cf_image)[obj_bundle_mask].mean(axis=0)
         floor_frac_arr = (sky_cf_image_scaled < 0)[obj_bundle_mask].mean(axis=0)
 
-        msg = ('   - sky continuum: scaled by sky-bundle {0}').format(method, ceiling_frac.mean(), floor_frac_arr.mean(), int((~in_fit_range).sum()))
+        msg = ('   - sky continuum: scaled by sky-bundle {0} ({1:.1%} ceiling-capped, {2:.1%} floor-capped, '
+               '{3} column(s) outside fit range)').format(method, ceiling_frac.mean(), floor_frac_arr.mean(), int((~in_fit_range).sum()))
     elif is_bright_standard:
         msg = '   - sky continuum: scaling skipped for bright calibration standard ({0}). No scaling applied'.format(trg_name)
     elif cfg['enable']:
@@ -2178,7 +2190,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         comment = 'Image has been sky (line + continuum) subtracted; continuum scaling disabled, used unscaled sky continuum'
     hdu['Primary'].header['SKYSUB'] = (value, comment)
 
-    return sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image_scaled, continuum_scale_variance
+    # Combine with the science exposure's own extraction variance -- final output is object-bundle only
+    variance_image_sky_sub = (sci_variance_image
+                               + crop_to_native_width(continuum_scale_variance, sci_variance_image.shape[1])
+                               + crop_to_native_width(skyline_subtraction_variance, sci_variance_image.shape[1]))
+
+    return (sci_image[obj_bundle_mask], sci_image_with_cont[obj_bundle_mask], sky_cs_scaled[obj_bundle_mask],
+            sky_cf_image_scaled[obj_bundle_mask], variance_image_sky_sub[obj_bundle_mask])
 
 
 # ---------------------------------------------------------------------------- #
