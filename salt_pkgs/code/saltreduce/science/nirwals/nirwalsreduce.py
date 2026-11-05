@@ -2385,7 +2385,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
  
     # Sequential colormap whose 'bad' (NaN) value renders white, for the panels
     # where interline regions are masked out
-    cmap_nan = mpl.colormaps['magma'].copy()
+    cmap_nan = mpl.colormaps['copper'].copy()
     cmap_nan.set_bad('white')
  
     # Helper: give every panel its own colorbar axis so stacked panels keep an
@@ -2460,7 +2460,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
  
     fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
  
-    im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap='magma')
+    im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap='copper')
     # axs[0].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[0].set_title('(A)  continuum-subtracted sky', fontsize=16, pad=5)
     colorbar_axis(axs[0], im0, label='counts / s')
@@ -2470,12 +2470,12 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     axs[1].set_title('(B)  scale factor', fontsize=16, pad=5)
     colorbar_axis(axs[1], im1, label='scale factor')
  
-    im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
+    im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='copper')
     # axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[2].set_title(r'(C)  science $-$ unscaled sky', fontsize=16, pad=5)
     colorbar_axis(axs[2], im2, label='counts / s')
  
-    im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='magma')
+    im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='copper')
     # axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[3].set_title(r'(D)  science $-$ scaled sky', fontsize=16, pad=5)
     axs[3].set_xlabel('spectral channel', fontsize=14, labelpad=12)
