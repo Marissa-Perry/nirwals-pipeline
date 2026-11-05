@@ -196,7 +196,7 @@
         },
         "sci": {
             "sigma_clip": {},
-            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 1.5, "niter": 10},
+            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 3, "niter": 10},
             "notes": [
                 "a. row masking is done for the determined row mask which takes into account the curvature of the rectification;",
                 "b. all row masks constitute 'image_mask' which is used to mask columns in spectral channels fit"
@@ -204,7 +204,7 @@
         },
         "sky_bundle": {
             "sigma_clip": {},
-            "fit": {"function": "legendre", "order": 3, "low_reject": 5, "high_reject": 1.5, "niter": 5},
+            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 3, "niter": 5},
             "notes": [
                 "a. fits the median of the 36 sky-bundle fibres' raw flux, one fit per exposure;",
                 "b. symmetric low/high_reject=3, appropriate for faint, low-S/N sky-bundle flux"
@@ -376,7 +376,7 @@
             "label_fontsize": 15,
             "labelpad": 15,
             "xlim": {"min": 0, "max": 0, "min_factor": 1.0, "max_factor": 1.0},
-            "ylim": {"min": 0, "max": 0, "min_factor": -0.5, "max_factor": 2.5},
+            "ylim": {"min": 0, "max": 0, "min_factor": -0.5, "max_factor": 3},
             "spectrum": {"label": "Spectrum", "linestyle": "-", "linewidth": 1.0, "color": "yellow"},
             "clip": {"label": "Spectrum - clipped", "linestyle": "-", "linewidth": 1.0, "color": "orange"},
             "fit": {"label": "Continuum fit", "linestyle": "--", "linewidth": 2.5, "color": "blue"},
