@@ -2107,7 +2107,9 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
         if method == 'ratio':
             ratio_min_sigma = cfg['ratio_min_sigma']
+            epsilon = 0.05   # sky continuum this close to zero can't constrain a ratio
             sky_nonzero = (sky_fit_cont > ratio_min_sigma * sigma_sky) if sigma_sky is not None else (sky_fit_cont > 0)
+            sky_nonzero &= sky_fit_cont > epsilon
             scale_curve = np.divide(obj_fit_cont, sky_fit_cont, out=np.ones_like(obj_fit_cont), where=sky_nonzero).astype(np.float32)
             sky_cf_image_scaled = sky_cf_image * scale_curve[None, :]
         else:
@@ -2149,7 +2151,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask, obj_bundle_mask=obj_bundle_mask)
     if scale_sky_cont:
         sky_cf_obj_mean_scaled = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
-        sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_sci_sky_bundle, med_sky_sky_bundle,
+        sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med_sci_sky_bundle, med_sky_sky_bundle,
                                     obj_fit_cont, sky_fit_cont, method, scale_curve, sky_cf_obj_mean, sky_cf_obj_mean_scaled,
                                     sci_cf_obj_mean)
     else:
@@ -2180,7 +2182,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
 
 # ---------------------------------------------------------------------------- #
-def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw, med_sky_raw,
+def sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med_obj_raw, med_sky_raw,
                                 obj_fit_curve, sky_fit_curve, method, scale_curve, sky_cf_obj_mean, sky_cf_obj_mean_scaled,
                                 sci_cf_obj_mean):
 # ---------------------------------------------------------------------------- #
@@ -2203,9 +2205,9 @@ def sky_continuum_scaling_plot(work, raw_obj_bundle, raw_sky_bundle, med_obj_raw
         for s, e in zip(starts, ends):
             ax.axvspan(s, e, color='grey', alpha=0.05, zorder=0)
 
-    for i, row in enumerate(raw_obj_bundle):
+    for i, row in enumerate(raw_sci_sky_bundle):
         ax1.step(wave, row, where='mid', color='orange', lw=0.4, alpha=0.25, label='science fibre' if i == 0 else None)
-    for i, row in enumerate(raw_sky_bundle):
+    for i, row in enumerate(raw_sky_sky_bundle):
         ax1.step(wave, row, where='mid', color='tab:blue', lw=0.4, alpha=0.25, label='sky fibre' if i == 0 else None)
     ax1.step(wave, med_obj_raw, where='mid', color='darkorange', lw=1.3, label='science median')
     ax1.step(wave, med_sky_raw, where='mid', color='tab:blue', lw=1.3, label='sky median')
