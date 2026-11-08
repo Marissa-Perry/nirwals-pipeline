@@ -206,7 +206,7 @@
             "sigma_clip": {},
             "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 3, "niter": 5},
             "notes": [
-                "a. fits the median of the 36 sky-bundle fibres' raw flux, one fit per exposure;",
+                "a. fits the median spectrum of a V-groove block's sky-bundle fibres, one fit per exposure;",
                 "b. symmetric low/high_reject=3, appropriate for faint, low-S/N sky-bundle flux"
             ]
         }
@@ -231,18 +231,15 @@
         "residual_sigma": 5,
         "continuum": {
             "notes": [
-                "a. each object-bundle fiber's own sky-frame continuum is adjusted, never replaced, using a single per-wavelength correction derived from the sky-bundle's median continuum fits (science exposure vs dedicated sky exposure);",
-                "b. method = 'ratio': sky_cf_image * obj_continuum/sky_continuum -- cancels sky-bundle/object-bundle illumination mismatch exactly, but unstable if sky_continuum crosses zero;",
-                "c. method = 'additive': sky_cf_image + (obj_continuum - sky_continuum) -- stable everywhere, but biased by illumination mismatch whenever the sky continuum genuinely changed between exposures;",
-                "d. min_sky_fibers = skip scaling if too few sky-bundle fibres have valid continuum;",
-                "e. skip_for_objects = OBJECT name prefixes to always skip scaling for -- accounting for any leaked starlight in the sky-bundle;",
-                "f. columns outside the sky-bundle's own valid wavelength range are left unscaled -- the continuum fit extrapolates there, not real sky;",
-                "g. ratio_min_sigma = method 'ratio' only: sky continuum columns below this many sigma of their own fit uncertainty are left unscaled, instead of dividing by a near-zero/negative value"
+                "a. the sky-frame continuum is scaled by a shared wavelength-dependent shape times a per-V-groove-block amplitude;",
+                "b. the shape is the ratio of the science- and sky-frame continuum fits to all sky-bundle fibers pooled; each block's amplitude is the median, over columns passing continuum_floor, of that block's own science/sky ratio divided by the shape;",
+                "c. continuum_floor = columns where either frame's continuum fit falls at or below this level [counts/s] are excluded from the median;",
+                "d. min_sky_fibers = skip a V-groove block's correction if it has fewer valid sky-bundle fibers than this;",
+                "e. skip_for_objects = OBJECT name prefixes to always skip scaling for -- accounting for any leaked starlight in the sky-bundle"
             ],
-            "enable": 1,
-            "method": "ratio",
-            "min_sky_fibers": 10,
-            "ratio_min_sigma": 5,
+            "enable": 0,
+            "min_sky_fibers": 3,
+            "continuum_floor": 0.1,
             "skip_for_objects": ["HIP", "HD"]
         }
     },

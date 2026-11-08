@@ -19,12 +19,14 @@ import numpy as np
 from scipy.signal import find_peaks
 from scipy.signal import savgol_filter
 from scipy.optimize import curve_fit
+from scipy.ndimage import median_filter
 # astropy imports
 from astropy.io import fits
 from astropy.stats import sigma_clip, mad_std
 # matplotlib imports
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as grid
+import matplotlib.patheffects as patheffects
 
 # Local application imports
 # - saltutility.keys
@@ -968,6 +970,8 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
     # Row mask for the sky-bundle fibres, same row order as image/gpcnt_image
     sky_bundle_mask = np.array([traces[fid]['type'] == 'sky' for fid in fibres.keys()])
+    # V-groove block (1-8) per fibre
+    vblk = np.array([traces[fid]['block'] for fid in fibres.keys()])
 
     # Fit and subtract continuum, using the sky exposure's own skyline mask for the science frame
     cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log, sky_bundle_mask)
@@ -985,7 +989,7 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     if work['exp_type'] == 'science':
         # Subtract sky (object-bundle fibers only)
         sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image, variance_image_sky_sub = subtract_sky(
-            hdu, cf_image, cs_image, sf_image, sky_bundle_mask, variance_image, work, log)
+            hdu, cf_image, cs_image, sf_image, sky_bundle_mask, vblk, variance_image, work, log)
         skycorr_ss = sky_cs_scaled
         skycorr_ssc = skycorr_ss
         if sky_cs_scaled is not None and sky_cf_image is not None:
@@ -1896,7 +1900,115 @@ def variance_of_median(var_bundle, valid_edge):
     return np.where(good, (np.pi / 2) * mean_var / np.maximum(n_valid, 1), np.inf).astype(np.float32)
 
 # ---------------------------------------------------------------------------- #
-def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask, sci_variance_image, work, log):
+def fit_sky_bundle_medians(sky_rows, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
+                            sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    Median sky-bundle spectrum per frame for one set of sky-bundle fibre rows, with each frame's
+    continuum fit, the skyline/edge fit mask, and the columns where both fits clear continuum_floor.
+
+    Returns (med_sci, med_sky, obj_fit_curve, sky_fit_curve, fit_mask, floor_mask, med_sci_var, med_sky_var)
+    '''
+    if sky_rows.sum() < cfg['min_sky_fibers']:
+        return None, None, None, None, None, None, None, None
+
+    # sky-bundle spectra, continuum restored
+    raw_sci = (sci_cs_image + sci_cf_image)[sky_rows]
+    raw_sky = (sky_cs_image + sky_cf_image)[sky_rows]
+
+    # Median sky-bundle spectrum per frame
+    valid_edge = (raw_sci != 0) & (raw_sky != 0) & np.isfinite(raw_sci) & np.isfinite(raw_sky)
+    has_cols = valid_edge.any(axis=0)
+    med_sci = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
+    med_sky = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
+    med_sci[has_cols] = np.nanmedian(np.where(valid_edge[:, has_cols], raw_sci[:, has_cols], np.nan), axis=0)
+    med_sky[has_cols] = np.nanmedian(np.where(valid_edge[:, has_cols], raw_sky[:, has_cols], np.nan), axis=0)
+
+    # Variance of each median, from the two exposures' own per-fiber extraction variance -- weights the fits below
+    fit_mask = has_cols & continuum_interline_col
+    sci_var_rows = align_native_width(sci_variance_image, sci_cf_image.shape[1])[sky_rows]
+    med_sci_var = variance_of_median(sci_var_rows, valid_edge)
+    sci_yerr = np.sqrt(med_sci_var) if np.any(np.isfinite(med_sci_var[fit_mask])) else None
+    sky_yerr = med_sky_var = None
+    if sky_a_ivar is not None:
+        sky_var_rows = np.where(sky_a_ivar > 0, 1.0 / sky_a_ivar, np.inf).astype(np.float32)[sky_rows]
+        med_sky_var = variance_of_median(sky_var_rows, valid_edge)
+        sky_yerr = np.sqrt(med_sky_var) if np.any(np.isfinite(med_sky_var[fit_mask])) else None
+
+    # Continuum fit of the median sky-bundle spectrum, per exposure -- skylines excluded, low counts still included
+    obj_cf = fit_continuum('sky_bundle', 'median', 'science', xarr, med_sci, fit_mask, work, log, yerr=sci_yerr)
+    sky_cf = fit_continuum('sky_bundle', 'median', 'sky', xarr, med_sky, fit_mask, work, log, yerr=sky_yerr)
+    if obj_cf is None or sky_cf is None:
+        return med_sci, med_sky, None, None, fit_mask, None, med_sci_var, med_sky_var
+    obj_fit_curve = obj_cf(xarr)
+    sky_fit_curve = sky_cf(xarr)
+
+    # Columns where either frame's continuum fit is too close to zero can't constrain anything derived from it
+    floor = cfg['continuum_floor']
+    floor_mask = (obj_fit_curve > floor) & (sky_fit_curve > floor)
+
+    return med_sci, med_sky, obj_fit_curve, sky_fit_curve, fit_mask, floor_mask, med_sci_var, med_sky_var
+
+# ---------------------------------------------------------------------------- #
+def fit_sky_bundle_shape(sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
+                          sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    The sky-bundle's shared science/sky continuum shape: the ratio of the two continuum fits to
+    all sky-bundle fibres pooled, frozen at its nearest valid value outside the columns that clear
+    continuum_floor.
+
+    Returns (shape, floor_mask), or (None, None) if the fit fails.
+    '''
+    med_sci, med_sky, obj_fit_curve, sky_fit_curve, fit_mask, floor_mask, *_ = fit_sky_bundle_medians(
+        sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
+        sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log)
+    if obj_fit_curve is None or not floor_mask.any():
+        return None, None
+
+    shape = (obj_fit_curve / sky_fit_curve).astype(np.float32)
+
+    # outside the valid range the fit extrapolates, unconstrained -- freeze at the nearest valid value
+    blue_idx, red_idx = np.flatnonzero(floor_mask)[[0, -1]]
+    shape[:blue_idx] = shape[blue_idx]
+    shape[red_idx + 1:] = shape[red_idx]
+
+    return shape, floor_mask
+
+# ---------------------------------------------------------------------------- #
+def fit_sky_bundle_amplitude(sky_rows, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
+                              sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log,
+                              shape, shape_floor_mask):
+# ---------------------------------------------------------------------------- #
+    '''
+    One V-groove block's amplitude relative to the shared sky-bundle shape: the median, over
+    columns passing continuum_floor, of the block's own science/sky ratio divided by that shape.
+
+    Returns (amplitude, sigma_amplitude, low_count_mask, obj_fit_curve, sky_fit_curve, med_sci, med_sky)
+    '''
+    med_sci, med_sky, obj_fit_curve, sky_fit_curve, fit_mask, floor_mask, med_sci_var, med_sky_var = fit_sky_bundle_medians(
+        sky_rows, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
+        sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log)
+    if med_sci is None:
+        return None, None, None, None, None, None, None
+    if obj_fit_curve is None:
+        return None, None, None, None, None, med_sci, med_sky
+
+    # columns too low in counts/s to constrain this block's correction, in its own fit or the shared shape
+    low_count_mask = ~(floor_mask & shape_floor_mask)
+    valid = fit_mask & ~low_count_mask
+    if not valid.any():
+        return None, None, low_count_mask, obj_fit_curve, sky_fit_curve, med_sci, med_sky
+
+    point_vals = (med_sci[valid] / med_sky[valid]) / shape[valid]
+
+    amplitude = np.float32(np.median(point_vals))
+    sigma_amplitude = np.float32(1.2533 * mad_std(point_vals) / np.sqrt(valid.sum())) if valid.sum() > 1 else None
+
+    return amplitude, sigma_amplitude, low_count_mask, obj_fit_curve, sky_fit_curve, med_sci, med_sky
+
+# ---------------------------------------------------------------------------- #
+def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask, vblk, sci_variance_image, work, log):
 # ---------------------------------------------------------------------------- #
 
     # Add message to log
@@ -2058,96 +2170,66 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     else:
         skyline_subtraction_variance = np.zeros_like(sci_cs_image, dtype=np.float32)
 
-    # Scale sky-continuum in the sky frame up to the science frame using sky-bundle fibres
+    # Scale sky-continuum in the sky frame up to the science frame: a shared wavelength-dependent
+    # shape (all sky-bundle fibres pooled) times a per-V-groove-block amplitude
     cfg = work['sky_scaling']['continuum']
-    sky_cf_image_scaled = sky_cf_image
+    sky_cf_image_scaled = sky_cf_image.copy()
     is_bright_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in cfg['skip_for_objects'])   # leaked starlight would inflate the ratio, not reflect real sky
-    scale_sky_cont = cfg['enable'] and not is_bright_standard and sky_bundle_mask.sum() >= cfg['min_sky_fibers']
-
-    obj_fit_cont = sky_fit_cont = med_sci_sky_bundle = med_sky_sky_bundle = None
     continuum_scale_variance = np.zeros_like(sci_cf_image, dtype=np.float32)   # fit uncertainty on the continuum correction, added to the output variance
-
-    if scale_sky_cont:
-        # sky-bundle frames
-        raw_sci_sky_bundle = (sci_cs_image + sci_cf_image)[sky_bundle_mask]   # (n_sky, cols)
-        raw_sky_sky_bundle  = (sky_cs_image + sky_cf_image)[sky_bundle_mask]   # (n_sky, cols)
-
-        # Median sky-bundle spectrum per frame
-        valid_edge = ((raw_sci_sky_bundle != 0) & (raw_sky_sky_bundle != 0)
-                      & np.isfinite(raw_sci_sky_bundle) & np.isfinite(raw_sky_sky_bundle))
-        has_cols = valid_edge.any(axis=0)
-        med_sci_sky_bundle = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
-        med_sky_sky_bundle = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
-        med_sci_sky_bundle[has_cols] = np.nanmedian(np.where(valid_edge[:, has_cols], raw_sci_sky_bundle[:, has_cols], np.nan), axis=0)
-        med_sky_sky_bundle[has_cols] = np.nanmedian(np.where(valid_edge[:, has_cols], raw_sky_sky_bundle[:, has_cols], np.nan), axis=0)
-
-        # Variance of each median, from the two exposures' own per-fiber extraction variance -- weights the fits below
-        fit_mask_1d = has_cols & continuum_interline_col
-        xarr = work['we']
-        sci_var_sky_bundle = align_native_width(sci_variance_image, sci_cf_image.shape[1])[sky_bundle_mask]
-        med_sci_var = variance_of_median(sci_var_sky_bundle, valid_edge)
-        obj_yerr = np.sqrt(med_sci_var) if np.any(np.isfinite(med_sci_var[fit_mask_1d])) else None
-        sky_yerr = None
-        if sky_a_ivar is not None:
-            sky_var_bundle = np.where(sky_a_ivar > 0, 1.0 / sky_a_ivar, np.inf).astype(np.float32)[sky_bundle_mask]
-            med_sky_var = variance_of_median(sky_var_bundle, valid_edge)
-            sky_yerr = np.sqrt(med_sky_var) if np.any(np.isfinite(med_sky_var[fit_mask_1d])) else None
-
-        # Continuum fit of the median sky-bundle spectrum, per exposure -- skylines excluded
-        obj_cf = fit_continuum('sky_bundle', 'median', 'science', xarr, med_sci_sky_bundle, fit_mask_1d, work, log, yerr=obj_yerr)
-        sky_cf = fit_continuum('sky_bundle', 'median', 'sky', xarr, med_sky_sky_bundle, fit_mask_1d, work, log, yerr=sky_yerr)
-        scale_sky_cont = (obj_cf is not None) and (sky_cf is not None)
-
-        # cf(xarr) below extrapolates past the fitted columns; outside this range it's unconstrained, not real sky
-        fit_wave = xarr[fit_mask_1d]
-        in_fit_range = ((xarr >= fit_wave.min()) & (xarr <= fit_wave.max())) if fit_wave.size else np.zeros_like(xarr, dtype=bool)
+    xarr = work['we']
 
     # Mean sky-frame continuum for the object-bundle rows
     sky_cf_obj_mean = sky_cf_image[obj_bundle_mask].mean(axis=0)
     sci_cf_obj_mean = sci_cf_image[obj_bundle_mask].mean(axis=0)
 
+    block_continuum_ratios = {}   # per-block amplitudes actually applied, for the diagnostic plot
+    block_med_sci = {}
+    block_med_sky = {}
+    block_obj_fit_curves = {}
+    block_sky_fit_curves = {}
+    block_low_count_mask = {}
+    if cfg['enable'] and not is_bright_standard:
+        shape, shape_floor_mask = fit_sky_bundle_shape(
+            sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
+            sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log)
+
+        if shape is not None:
+            for vb in sorted(set(vblk)):
+                sky_rows = sky_bundle_mask & (vblk == vb)
+                obj_rows = obj_bundle_mask & (vblk == vb)
+                if not obj_rows.any():
+                    continue
+
+                amplitude, sigma_amplitude, low_count_mask, obj_fit_curve, sky_fit_curve, med_sci, med_sky = fit_sky_bundle_amplitude(
+                    sky_rows, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
+                    sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log, shape, shape_floor_mask)
+                if amplitude is None:
+                    continue
+
+                sky_cf_image_scaled[obj_rows] = sky_cf_image[obj_rows] * (shape * amplitude)[None, :]
+
+                if sigma_amplitude is not None:
+                    continuum_scale_variance[obj_rows] = (sky_cf_image[obj_rows] * shape[None, :])**2 * (sigma_amplitude**2)
+
+                block_continuum_ratios[vb] = amplitude
+                block_med_sci[vb] = med_sci
+                block_med_sky[vb] = med_sky
+                block_obj_fit_curves[vb] = obj_fit_curve
+                block_sky_fit_curves[vb] = sky_fit_curve
+                block_low_count_mask[vb] = low_count_mask
+
+    scale_sky_cont = len(block_continuum_ratios) > 0
+
+    ceiling_frac = (sky_cf_image_scaled > sci_cf_image)[obj_bundle_mask].mean(axis=0)
+    floor_frac_arr = (sky_cf_image_scaled < 0)[obj_bundle_mask].mean(axis=0)
+
     if scale_sky_cont:
-        obj_fit_cont = obj_cf(xarr)
-        sky_fit_cont = sky_cf(xarr)
-        method = cfg['method']
-
-        # fit uncertainty on the object-bundle continuum curve
-        sigma_obj = obj_cf.err_at(xarr)
-        # fit uncertainty on the sky-bundle continuum curve
-        sigma_sky = sky_cf.err_at(xarr)
-
-        if method == 'ratio':
-            ratio_min_sigma = cfg['ratio_min_sigma']
-            epsilon = 0.05   # sky continuum this close to zero can't constrain a ratio
-            sky_nonzero = (sky_fit_cont > ratio_min_sigma * sigma_sky) if sigma_sky is not None else (sky_fit_cont > 0)
-            sky_nonzero &= sky_fit_cont > epsilon
-            scale_curve = np.divide(obj_fit_cont, sky_fit_cont, out=np.ones_like(obj_fit_cont), where=sky_nonzero).astype(np.float32)
-            sky_cf_image_scaled = sky_cf_image * scale_curve[None, :]
-        else:
-            scale_curve = (obj_fit_cont - sky_fit_cont).astype(np.float32)
-            sky_cf_image_scaled = sky_cf_image + scale_curve[None, :]
-        sky_cf_image_scaled[:, ~in_fit_range] = sky_cf_image[:, ~in_fit_range]   # extrapolated obj/sky_fit_cont there, not real -- leave unscaled
-
-        # Fit uncertainty on the correction itself, zero where no correction was applied (unweighted fit, or outside in_fit_range)
-        if sigma_obj is not None and sigma_sky is not None:
-            if method == 'ratio':
-                nz = sky_nonzero & (obj_fit_cont != 0)
-                rel_var = np.zeros_like(obj_fit_cont, dtype=np.float32)
-                rel_var[nz] = (sigma_obj[nz] / obj_fit_cont[nz])**2 + (sigma_sky[nz] / sky_fit_cont[nz])**2
-                scale_variance = (sky_cf_image_scaled**2) * rel_var[None, :]
-            else:
-                scale_variance = np.broadcast_to((sigma_obj**2 + sigma_sky**2)[None, :], sci_cf_image.shape)
-            continuum_scale_variance[:, in_fit_range] = scale_variance[:, in_fit_range]
-
-        ceiling_frac = (sky_cf_image_scaled > sci_cf_image)[obj_bundle_mask].mean(axis=0)
-        floor_frac_arr = (sky_cf_image_scaled < 0)[obj_bundle_mask].mean(axis=0)
-
-        msg = ('   - sky continuum: scaled by sky-bundle {0} ({1:.1%} ceiling-capped, {2:.1%} floor-capped, '
-               '{3} column(s) outside fit range)').format(method, ceiling_frac.mean(), floor_frac_arr.mean(), int((~in_fit_range).sum()))
+        msg = ('   - sky continuum: scaled by sky-bundle ratio, {0}/{1} V-groove blocks ({2:.1%} ceiling, '
+               '{3:.1%} floor)').format(len(block_continuum_ratios), len(set(vblk)), ceiling_frac.mean(), floor_frac_arr.mean())
     elif is_bright_standard:
         msg = '   - sky continuum: scaling skipped for bright calibration standard ({0}). No scaling applied'.format(trg_name)
     elif cfg['enable']:
-        msg = '   - sky continuum: too few valid sky-bundle fibers or fit failed. No scaling applied'
+        msg = '   - sky continuum: too few valid sky-bundle fibers in every V-groove block. No scaling applied'
     else:
         msg = '   - sky continuum: scaling disabled (enable=0). No scaling applied'
     log.message(msg, with_header=False)
@@ -2163,9 +2245,10 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask, obj_bundle_mask=obj_bundle_mask)
     if scale_sky_cont:
         sky_cf_obj_mean_scaled = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
-        sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med_sci_sky_bundle, med_sky_sky_bundle,
-                                    obj_fit_cont, sky_fit_cont, method, scale_curve, sky_cf_obj_mean, sky_cf_obj_mean_scaled,
-                                    sci_cf_obj_mean)
+        sky_continuum_scaling_plot(work, block_continuum_ratios,
+                                    sky_cf_obj_mean, sky_cf_obj_mean_scaled, sci_cf_obj_mean)
+        sky_continuum_fitting_plot(work, block_med_sci, block_med_sky, block_obj_fit_curves, block_sky_fit_curves,
+                                    block_low_count_mask, cfg['continuum_floor'])
     else:
         sci_frame_fibers = (sci_cs_image + sci_cf_image)[obj_bundle_mask]
         sky_frame_fibers = (sky_cs_image + sky_cf_image)[obj_bundle_mask]
@@ -2181,7 +2264,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     # Add sky subtracted header key, noting whether continuum scaling was included
     value = time.asctime(time.localtime())
     if scale_sky_cont:
-        comment = 'Image has been sky (line + continuum) subtracted, continuum scaled by sky-bundle {0}'.format(cfg['method'])
+        comment = 'Image has been sky (line + continuum) subtracted'
     elif is_bright_standard:
         comment = 'Image has been sky (line + continuum) subtracted; continuum scaling skipped for bright calibration standard'
     elif cfg['enable']:
@@ -2200,63 +2283,36 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
 
 # ---------------------------------------------------------------------------- #
-def sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med_obj_raw, med_sky_raw,
-                                obj_fit_curve, sky_fit_curve, method, scale_curve, sky_cf_obj_mean, sky_cf_obj_mean_scaled,
-                                sci_cf_obj_mean):
+def sky_continuum_scaling_plot(work, block_continuum_ratios,
+                                sky_cf_obj_mean, sky_cf_obj_mean_scaled, sci_cf_obj_mean):
 # ---------------------------------------------------------------------------- #
     '''
-    sky-bundle fibres and their continuum fits (science vs sky exposure), the correction curve
-    applied (ratio or additive offset), and the resulting object-bundle sky-continuum subtraction:
-    sky-frame continuum before/after scaling, the science frame's own continuum, and what remains
-    once the scaled sky continuum is subtracted from it.
+    The per-V-groove-block ratio correction applied, and the resulting object-bundle
+    sky-continuum subtraction.
     '''
-    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(8, 11), sharex=True, gridspec_kw={'hspace': 0.3})
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), gridspec_kw={'hspace': 0.4})
 
     wave = work['we']
+    vblk_colors = {1: '#f40005', 2: '#34b050', 3: '#43cccc', 4: '#1b33cc',
+                   5: '#9999ff', 6: '#66ffff', 7: '#4fff01', 8: '#f9c002'}
 
-    # skyline + blended region mask excluded from the sky-bundle continuum fit
-    skyline_mask = work['skyline_mask']
-    change = np.diff(np.concatenate([[0], skyline_mask.astype(int), [0]]))
-    starts = wave[np.where(change == 1)[0]]
-    ends = wave[np.where(change == -1)[0] - 1]
-    for ax in (ax1, ax2):
-        for s, e in zip(starts, ends):
-            ax.axvspan(s, e, color='grey', alpha=0.05, zorder=0)
-
-    for i, row in enumerate(raw_sci_sky_bundle):
-        ax1.step(wave, row, where='mid', color='orange', lw=0.4, alpha=0.25, label='science fibre' if i == 0 else None)
-    for i, row in enumerate(raw_sky_sky_bundle):
-        ax1.step(wave, row, where='mid', color='tab:blue', lw=0.4, alpha=0.25, label='sky fibre' if i == 0 else None)
-    ax1.step(wave, med_obj_raw, where='mid', color='darkorange', lw=1.3, label='science median')
-    ax1.step(wave, med_sky_raw, where='mid', color='tab:blue', lw=1.3, label='sky median')
-    ax1.set_ylabel('counts / s', fontsize=14, labelpad=15)
-    ax1.set_ylim(-3, np.nanpercentile(max(med_obj_raw.max(), med_sky_raw.max()), 99.9))
-    ax1.legend(fontsize=10, loc='upper right')
-    ax1.set_title('sky-bundle fiber spectra', fontsize=15, pad=13)
-
-    ax2.step(wave, med_obj_raw, where='mid', color='darkorange', lw=0.6, alpha=0.25)
-    ax2.step(wave, med_sky_raw, where='mid', color='tab:blue', lw=0.6, alpha=0.25)
-    ax2.plot(wave, obj_fit_curve, color='darkorange', lw=1.3)
-    ax2.plot(wave, sky_fit_curve, color='tab:blue', lw=1.3)
-    ax2.axhline(0, color='grey', ls='dashed', lw=0.8)
-    ax2.set_ylabel('counts / s', fontsize=14, labelpad=15)
-    ax2.set_ylim(min(obj_fit_curve.min(), sky_fit_curve.min())-0.01, max(obj_fit_curve.max(), sky_fit_curve.max())+0.3)
-    ax2.set_title('sky-bundle continuum fits', fontsize=15, pad=13)
-
-    ax3.step(wave, scale_curve, where='mid', color='black', lw=0.8)
-    ax3.set_ylabel('scale factor' if method == 'ratio' else 'offset [counts / s]', fontsize=14, labelpad=15)
-    ax3.set_title('{0} correction'.format(method), fontsize=15, pad=13)
+    vbs = sorted(block_continuum_ratios)
+    ax1.bar([str(vb) for vb in vbs], [block_continuum_ratios[vb] for vb in vbs],
+            color=[vblk_colors.get(vb, 'black') for vb in vbs])
+    ax1.set_xticklabels(['VBLK {0}'.format(vb) for vb in vbs])
+    ax1.set_ylabel('scale factor', fontsize=14, labelpad=15)
+    ax1.set_title('ratio correction', fontsize=15, pad=13)
 
     subtracted_sci_cf = sci_cf_obj_mean - sky_cf_obj_mean_scaled
-    ax4.axhline(0, color='grey', ls='dashed', lw=0.8)
-    ax4.step(wave, sky_cf_obj_mean, where='mid', color='grey', lw=1.0, label='unscaled sky')
-    ax4.step(wave, sky_cf_obj_mean_scaled, where='mid', color='black', lw=1.0, label='scaled sky')
-    ax4.step(wave, sci_cf_obj_mean, where='mid', color='darkorange', lw=1.0, ls='dashed', label='raw science')
-    ax4.step(wave, subtracted_sci_cf, where='mid', color='firebrick', lw=1.5, label='subtracted science')
-    ax4.set_ylabel('counts / s', fontsize=14, labelpad=15)
-    ax4.legend(fontsize=11, loc='upper right')
-    ax4.set_title('object-bundle sky-continuum subtraction', fontsize=15, pad=13)
-    ax4.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
+    ax2.axhline(0, color='grey', ls='dashed', lw=0.8)
+    ax2.step(wave, sky_cf_obj_mean, where='mid', color='grey', ls='dashed', lw=1.0, label='unscaled sky')
+    ax2.step(wave, sky_cf_obj_mean_scaled, where='mid', color='grey', ls='solid', lw=1.0, label='scaled sky')
+    ax2.step(wave, sci_cf_obj_mean, where='mid', color='black', ls='dashed', lw=1.0, label='raw science')
+    ax2.step(wave, subtracted_sci_cf, where='mid', color='black', ls='solid', lw=1.5, label='subtracted science')
+    ax2.set_ylabel('counts / s', fontsize=14, labelpad=15)
+    ax2.legend(fontsize=11, loc='upper right')
+    ax2.set_title('object-bundle sky-continuum subtraction', fontsize=15, pad=13)
+    ax2.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
 
     plot_dir = get_plot_dir(work, 'sky_subtraction')
     png_file = '{0}_sky_continuum_subtraction.png'.format(work['file'])
@@ -2268,6 +2324,85 @@ def sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med
 
 
 
+
+# ---------------------------------------------------------------------------- #
+def sky_continuum_fitting_plot(work, block_med_sci, block_med_sky, block_obj_fit_curves, block_sky_fit_curves,
+                                block_low_count_mask, continuum_floor):
+# ---------------------------------------------------------------------------- #
+    '''
+    Per-V-groove-block sky-bundle continuum fits: one row per block, one column per frame
+    (science, sky), each showing that block's median sky-bundle spectrum and its continuum fit.
+    '''
+    wave = work['we']
+    vblk_colors = {1: '#f40005', 2: '#34b050', 3: '#43cccc', 4: '#1b33cc',
+                   5: '#9999ff', 6: '#66ffff', 7: '#4fff01', 8: '#f9c002'}
+
+    blocks = sorted(block_obj_fit_curves)
+    fig, axes = plt.subplots(len(blocks), 2, figsize=(10, 1.3 * len(blocks)), sharex=True, sharey=True,
+                              gridspec_kw={'hspace': 0, 'wspace': 0})
+
+    # zoom to the continuum fits' own range, same as the continuum-fits panel of sky_continuum_subtraction
+    all_fits = list(block_obj_fit_curves.values()) + list(block_sky_fit_curves.values())
+    ylim = (min(np.nanmin(arr) for arr in all_fits) - 0.01, max(np.nanmax(arr) for arr in all_fits) + 0.3)
+
+    # skyline + blended region mask excluded from the sky-bundle continuum fit
+    skyline_mask = work['skyline_mask']
+    change = np.diff(np.concatenate([[0], skyline_mask.astype(int), [0]]))
+    starts = wave[np.where(change == 1)[0]]
+    ends = wave[np.where(change == -1)[0] - 1]
+
+    for row, vb in enumerate(blocks):
+        color = vblk_colors.get(vb, 'black')
+        ax_sci, ax_sky = axes[row]
+
+        # columns too low in counts/s to constrain this block's correction
+        low_count_mask = block_low_count_mask[vb]
+        low_change = np.diff(np.concatenate([[0], low_count_mask.astype(int), [0]]))
+        low_starts = wave[np.where(low_change == 1)[0]]
+        low_ends = wave[np.where(low_change == -1)[0] - 1]
+
+        for ax in (ax_sci, ax_sky):
+            for s, e in zip(starts, ends):
+                ax.axvspan(s, e, color='grey', alpha=0.05, zorder=0)
+            for s, e in zip(low_starts, low_ends):
+                ax.axvspan(s, e, color='grey', alpha=0.25, zorder=0)
+        ax_sci.axhline(0, color='black', ls='dashed', lw=0.8)
+        ax_sci.axhline(continuum_floor, color='grey', ls='dotted', lw=0.8)
+        ax_sci.plot(wave, block_med_sci[vb], color=color, lw=0.8, alpha=0.2)
+        ax_sci.plot(wave, median_filter(block_med_sci[vb], size=20), color=color, lw=1.0, alpha=0.5)
+        ax_sci.plot(wave, block_obj_fit_curves[vb], color=color, lw=1.3, ls='-')
+        ax_sci.text(0.03, 0.90, 'VBLK {0}'.format(vb), color=color, fontsize=11, fontweight='bold',
+                    ha='left', va='top', transform=ax_sci.transAxes,
+                    path_effects=[patheffects.withStroke(linewidth=2, foreground='black')])
+
+        ax_sky.axhline(0, color='black', ls='dashed', lw=0.8)
+        ax_sky.axhline(continuum_floor, color='grey', ls='dotted', lw=0.8)
+        ax_sky.plot(wave, block_med_sky[vb], color=color, lw=0.8, alpha=0.15)
+        ax_sky.plot(wave, median_filter(block_med_sky[vb], size=20), color=color, lw=1.0, alpha=0.6)
+        ax_sky.plot(wave, block_sky_fit_curves[vb], color=color, lw=1.3, ls='--')
+
+        ax_sci.set_ylim(*ylim)
+        ax_sci.locator_params(axis='x', nbins=4)
+        ax_sci.label_outer()
+        ax_sky.label_outer()
+        # tick marks drawn inward so they aren't covered by the panel below (hspace=0)
+        ax_sci.tick_params(axis='x', which='both', direction='in', top=True, bottom=True)
+        ax_sky.tick_params(axis='x', which='both', direction='in', top=True, bottom=True)
+
+    axes[0, 0].set_title('science frame', fontsize=13)
+    axes[0, 1].set_title('sky frame', fontsize=13)
+    fig.suptitle('sky bundle', fontsize=16, y=0.98)
+    fig.text(0.5, 0.01, r'Wavelength [$\AA$]', ha='center', fontsize=14)
+    fig.text(0.015, 0.5, 'counts / s', va='center', rotation='vertical', fontsize=14)
+    fig.subplots_adjust(top=0.93, bottom=0.08, left=0.1)
+
+    plot_dir = get_plot_dir(work, 'sky_subtraction')
+    png_file = '{0}_sky_continuum_fitting.png'.format(work['file'])
+    filepath = os.path.join(plot_dir, png_file)
+    plt.savefig(filepath, dpi=180, format='png', bbox_inches='tight')
+    plt.close()
+
+    return
 
 # ---------------------------------------------------------------------------- #
 def sky_continuum_unscaled_plot(work, sci_frame_fibers, sky_frame_fibers, med_sci, med_sky, sci_cf_mean, sky_cf_mean):
