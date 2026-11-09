@@ -2173,12 +2173,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
         sky_frame_fibers = (sky_cs_image + sky_cf_image)[obj_bundle_mask]
         valid = (sci_frame_fibers != 0) & (sky_frame_fibers != 0) & np.isfinite(sci_frame_fibers) & np.isfinite(sky_frame_fibers)
         has_cols = valid.any(axis=0)
-        med_sci = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
-        med_sky = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
-        med_sci[has_cols] = np.nanmedian(np.where(valid[:, has_cols], sci_frame_fibers[:, has_cols], np.nan), axis=0)
-        med_sky[has_cols] = np.nanmedian(np.where(valid[:, has_cols], sky_frame_fibers[:, has_cols], np.nan), axis=0)
+        mean_sci = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
+        mean_sky = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
+        # mean (not median) to match sci_cf_obj_mean/sky_cf_obj_mean_capped -- same statistic, same raw flux these continua are averaged from
+        mean_sci[has_cols] = np.nanmean(np.where(valid[:, has_cols], sci_frame_fibers[:, has_cols], np.nan), axis=0)
+        mean_sky[has_cols] = np.nanmean(np.where(valid[:, has_cols], sky_frame_fibers[:, has_cols], np.nan), axis=0)
         sky_cf_obj_mean_capped = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)   # reflects the ceiling applied above
-        sky_continuum_unscaled_plot(work, sci_frame_fibers, sky_frame_fibers, med_sci, med_sky, sci_cf_obj_mean, sky_cf_obj_mean_capped)
+        sky_continuum_unscaled_plot(work, mean_sci, mean_sky, sci_cf_obj_mean, sky_cf_obj_mean_capped)
 
     # Add sky subtracted header key, noting whether continuum scaling was included
     value = time.asctime(time.localtime())
@@ -2272,43 +2273,35 @@ def sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med
     return
 
 # ---------------------------------------------------------------------------- #
-def sky_continuum_unscaled_plot(work, sci_frame_fibers, sky_frame_fibers, med_sci, med_sky, sci_cf_mean, sky_cf_mean):
+def sky_continuum_unscaled_plot(work, mean_sci, mean_sky, sci_cf_mean, sky_cf_mean):
 # ---------------------------------------------------------------------------- #
     '''
-    object-bundle fiber spectra (science vs sky frame) and their mean continuum,
-    and the resulting continuum after subtracting them -- for when sky-bundle
-    ratio scaling is disabled or unavailable.
+    object-bundle mean continuum (science vs sky frame), and the resulting
+    continuum after subtracting them -- for when sky-bundle ratio scaling
+    is disabled or unavailable.
     '''
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8, 8.25), sharex=True, gridspec_kw={'hspace': 0.3})
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 5.5), sharex=True, gridspec_kw={'hspace': 0.3})
 
     wave = work['we']
-    for i, row in enumerate(sci_frame_fibers):
-        ax1.step(wave, row, where='mid', color='orange', lw=0.4, alpha=0.15, label='science fibre' if i == 0 else None)
-    for i, row in enumerate(sky_frame_fibers):
-        ax1.step(wave, row, where='mid', color='tab:blue', lw=0.4, alpha=0.15, label='sky fibre' if i == 0 else None)
-    ax1.step(wave, med_sci, where='mid', color='darkorange', lw=1.3, label='science median')
-    ax1.step(wave, med_sky, where='mid', color='tab:blue', lw=1.3, label='sky median')
+    ax1.step(wave, mean_sci, where='mid', color='darkorange', lw=0.6, alpha=0.4)
+    ax1.step(wave, mean_sky, where='mid', color='tab:blue', lw=0.6, alpha=0.4)
+    ax1.step(wave, sci_cf_mean, where='mid', color='darkorange', lw=1.3, label='science')
+    ax1.step(wave, sky_cf_mean, where='mid', color='tab:blue', lw=1.3, label='sky')
+    ax1.axhline(0, color='grey', ls='dashed', lw=0.8)
     ax1.set_ylabel('counts / s', fontsize=14, labelpad=15)
-    ax1.set_ylim(-3, np.nanpercentile(max(med_sci.max(), med_sky.max()), 99.9))
+    ax1.set_ylim(min(sci_cf_mean.min(), sky_cf_mean.min())-0.2, max(sci_cf_mean.max(), sky_cf_mean.max())+0.2)
     ax1.legend(fontsize=10, loc='upper right')
-    ax1.set_title('object-bundle fiber spectra', fontsize=15, pad=13)
-
-    ax2.step(wave, med_sci, where='mid', color='darkorange', lw=0.6, alpha=0.25)
-    ax2.step(wave, med_sky, where='mid', color='tab:blue', lw=0.6, alpha=0.25)
-    ax2.step(wave, sci_cf_mean, where='mid', color='darkorange', lw=1.3, label='science')
-    ax2.step(wave, sky_cf_mean, where='mid', color='tab:blue', lw=1.3, label='sky')
-    ax2.axhline(0, color='grey', ls='dashed', lw=0.8)
-    ax2.set_ylabel('counts / s', fontsize=14, labelpad=15)
-    ax2.set_ylim(min(sci_cf_mean.min(), sky_cf_mean.min())-0.2, max(sci_cf_mean.max(), sky_cf_mean.max())+0.2)
-    ax2.legend(fontsize=10, loc='upper right')
-    ax2.set_title('object-bundle continuum fits', fontsize=15, pad=13)
+    ax1.set_title('object-bundle continuum fits', fontsize=15, pad=13)
 
     subtracted = sci_cf_mean - sky_cf_mean
-    ax3.axhline(0.0, color='grey', lw=0.8, ls='--')
-    ax3.step(wave, subtracted, where='mid', color='black', lw=1.0)
-    ax3.set_ylabel('counts / s', fontsize=14, labelpad=15)
-    ax3.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
-    ax3.set_title('sky-continuum subtracted science continuum fit', fontsize=15, pad=13)
+    ax2.axhline(0.0, color='grey', lw=0.8, ls='--')
+    ax2.step(wave, subtracted, where='mid', color='black', lw=2)
+    ax2.set_ylabel('counts / s', fontsize=14, labelpad=15)
+    ymin, ymax = ax2.get_ylim()
+    ax2.set_ylim(ymin, ymax + 0.4 * (ymax - ymin))
+    ax2.set_title('sky-continuum subtracted science continuum fit', fontsize=15, pad=13)
+    ax2.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
+    ax2.set_xlim(wave[0], wave[-1])
 
     plot_dir = get_plot_dir(work, 'sky_subtraction')
     png_file = '{0}_sky_continuum_subtraction.png'.format(work['file'])
