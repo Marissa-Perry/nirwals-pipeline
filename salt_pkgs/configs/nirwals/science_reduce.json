@@ -206,8 +206,7 @@
             "sigma_clip": {},
             "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 3, "niter": 5},
             "notes": [
-                "a. fits the median spectrum of a V-groove block's sky-bundle fibres, one fit per exposure;",
-                "b. symmetric low/high_reject=3, appropriate for faint, low-S/N sky-bundle flux"
+                "a. fits the sky-bundle's median spectrum, one fit per exposure (science, sky)"
             ]
         }
     },
@@ -231,13 +230,13 @@
         "residual_sigma": 5,
         "continuum": {
             "notes": [
-                "a. the sky-frame continuum is scaled by a shared wavelength-dependent shape times a per-V-groove-block amplitude;",
-                "b. the shape is the ratio of the science- and sky-frame continuum fits to all sky-bundle fibers pooled; each block's amplitude is the median, over columns passing continuum_floor, of that block's own science/sky ratio divided by the shape;",
-                "c. continuum_floor = columns where either frame's continuum fit falls at or below this level [counts/s] are excluded from the median;",
-                "d. min_sky_fibers = skip a V-groove block's correction if it has fewer valid sky-bundle fibers than this;",
+                "a. the sky-frame continuum is scaled by a wavelength-dependent ratio of continuum fits to the sky-bundle's median spectrum (science/sky);",
+                "b. outside the columns passing continuum_floor the ratio is frozen at its nearest valid value;",
+                "c. continuum_floor = columns where either frame's continuum fit falls at or below this level [counts/s] are excluded;",
+                "d. min_sky_fibers = skip the correction if there are fewer valid sky-bundle fibers than this;",
                 "e. skip_for_objects = OBJECT name prefixes to always skip scaling for -- accounting for any leaked starlight in the sky-bundle"
             ],
-            "enable": 0,
+            "enable": 1,
             "min_sky_fibers": 3,
             "continuum_floor": 0.1,
             "skip_for_objects": ["HIP", "HD"]
