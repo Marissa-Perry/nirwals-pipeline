@@ -1891,9 +1891,9 @@ def variance_of_median(var_bundle, valid_edge):
 def fit_sky_bundle_continuum(sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
                               sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log):
 # ---------------------------------------------------------------------------- #
-    '''Sky-bundle median spectrum (science, sky), their continuum fits, and valid columns.'''
+    '''Sky-bundle median spectrum (science, sky), their continuum fits with fit uncertainty, and valid columns.'''
     if sky_bundle_mask.sum() < cfg['min_sky_fibers']:
-        return None, None, None, None, None
+        return None, None, None, None, None, None, None
 
     raw_sci = (sci_cs_image + sci_cf_image)[sky_bundle_mask]
     raw_sky = (sky_cs_image + sky_cf_image)[sky_bundle_mask]
@@ -1919,15 +1919,17 @@ def fit_sky_bundle_continuum(sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs
     obj_cf = fit_continuum('sky_bundle', 'median', 'science', xarr, med_sci, fit_mask, work, log, yerr=sci_yerr)
     sky_cf = fit_continuum('sky_bundle', 'median', 'sky', xarr, med_sky, fit_mask, work, log, yerr=sky_yerr)
     if obj_cf is None or sky_cf is None:
-        return med_sci, med_sky, None, None, None
+        return med_sci, med_sky, None, None, None, None, None
     obj_fit_curve = obj_cf(xarr)
     sky_fit_curve = sky_cf(xarr)
+    obj_fit_err = obj_cf.err_at(xarr)
+    sky_fit_err = sky_cf.err_at(xarr)
 
     # Columns too low in counts/s can't constrain anything derived from the fits
     floor = cfg['continuum_floor']
     valid = fit_mask & (obj_fit_curve > floor) & (sky_fit_curve > floor)
 
-    return med_sci, med_sky, obj_fit_curve, sky_fit_curve, valid
+    return med_sci, med_sky, obj_fit_curve, sky_fit_curve, obj_fit_err, sky_fit_err, valid
 
 # ---------------------------------------------------------------------------- #
 def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask, sci_variance_image, work, log):
@@ -2096,6 +2098,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     cfg = work['sky_scaling']['continuum']
     sky_cf_image_scaled = sky_cf_image.copy()
     is_bright_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in cfg['skip_for_objects'])   # leaked starlight would inflate the ratio, not reflect real sky
+    continuum_scale_variance = np.zeros_like(sci_cf_image, dtype=np.float32)   # fit uncertainty on the continuum correction
     xarr = work['we']
 
     # Mean sky-frame continuum for the object-bundle rows
@@ -2104,7 +2107,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
     ratio = None
     if cfg['enable'] and not is_bright_standard:
-        med_sci, med_sky, obj_fit_curve, sky_fit_curve, valid = fit_sky_bundle_continuum(
+        med_sci, med_sky, obj_fit_curve, sky_fit_curve, obj_fit_err, sky_fit_err, valid = fit_sky_bundle_continuum(
             sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
             sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log)
 
@@ -2116,6 +2119,13 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
             ratio[red_idx + 1:] = ratio[red_idx]
 
             sky_cf_image_scaled[obj_bundle_mask] = sky_cf_image[obj_bundle_mask] * ratio[None, :]
+
+            # fit uncertainty on the ratio
+            if obj_fit_err is not None and sky_fit_err is not None:
+                ratio_err = ratio * np.sqrt((obj_fit_err / obj_fit_curve)**2 + (sky_fit_err / sky_fit_curve)**2)
+                ratio_err[:blue_idx] = ratio_err[blue_idx]
+                ratio_err[red_idx + 1:] = ratio_err[red_idx]
+                continuum_scale_variance[obj_bundle_mask] = (sky_cf_image[obj_bundle_mask] * ratio_err[None, :])**2
 
     scale_sky_cont = ratio is not None
 
@@ -2171,6 +2181,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
     # Combine with the science exposure's own extraction variance -- final output is object-bundle only
     variance_image_sky_sub = (sci_variance_image
+                               + crop_to_native_width(continuum_scale_variance, sci_variance_image.shape[1])
                                + crop_to_native_width(skyline_subtraction_variance, sci_variance_image.shape[1]))
 
     return (sci_image[obj_bundle_mask], sci_image_with_cont[obj_bundle_mask], sky_cs_scaled[obj_bundle_mask],
