@@ -7,7 +7,7 @@
         "b. The trace[fit] entry in nirwals/science_reduce.json must be the same as the trace[fit] entry in nirwals/science_prepare.json!"
     ],
 
-	"output": {"dir": "", "plot_wavelength_fit": 1, "plot_zero_points_fit": 1, "plot_continuum_fit": 1, "plot_fibre_extraction": 1},
+	"output": {"dir": "", "plot_wavelength_fit": 1, "plot_zero_points_fit": 1, "plot_continuum_fit": 1, "plot_fibre_extraction": 1, "plot_flat_response": 1},
     "product": {"dir": ""},
 
     "reduce_arc": {"exp_type": "Arc"},

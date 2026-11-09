@@ -564,16 +564,15 @@ def plot_fibre_extraction(work, id, fibre_type, spectrum, gpm_per_col, variance=
     plt.close(fig)
 
 # ---------------------------------------------------------------------------- #
-def plot_flat_throughput_smoothing(work, id, fibre_type, flt_2D, aperture_weight, flux, variance):
+def plot_flat_fielding(work, id, fibre_type, flt_2D, aperture_weight, flux, variance, gpm_per_col):
 # ---------------------------------------------------------------------------- #
     '''
-    Top: aperture-weighted sum of rows, its propagated error, and its mean.
-    Bottom: flux after flat-fielding (flux / flt_mean_norm), with its propagated uncertainty.
+    Top: normalised aperture-weighted sum of fiber rows (the flat-fielding curve).
+    Middle: extracted and flat-fielded flux
+    Bottom: good-pixel count per column
     '''
     flt_ap = flt_2D * aperture_weight
     flt_col_sums = flt_ap.sum(axis=0)
-    n_rows = flt_ap.shape[0]
-    flt_col_var = n_rows * np.var(flt_ap, axis=0)   # propagated onto the row sum, from the row-to-row variance
     cols = np.arange(flt_col_sums.shape[0])
     finite_positive = flt_col_sums[flt_col_sums > 0]
     valid_vals = 20 * np.median(finite_positive) if finite_positive.size else np.inf
@@ -582,26 +581,34 @@ def plot_flat_throughput_smoothing(work, id, fibre_type, flt_2D, aperture_weight
     flt_mean_norm = np.ones_like(flt_col_sums)
     flt_mean_norm[valid] = flt_col_sums[valid] / flt_mean
 
-    fig, (axF, axR) = plt.subplots(2, 1, figsize=(8, 5), sharex=True, gridspec_kw={'height_ratios': [2, 1], 'hspace': 0.0})
+    fig, (axF, axR, axG) = plt.subplots(3, 1, figsize=(8, 6), sharex=True, gridspec_kw={'height_ratios': [3, 3, 1], 'hspace': 0.0})
 
     bundle = 'sky-bundle' if fibre_type == 'sky' else 'object-bundle'
-    axF.set_title(f'flat fielding: fiber #{id} ({bundle})', fontsize=15, pad=13)
-    flt_sigma = np.sqrt(np.where(flt_col_var > 0, flt_col_var, np.nan))
-    axF.fill_between(cols, flt_col_sums - flt_sigma, flt_col_sums + flt_sigma, step='mid', color='grey', alpha=0.4)
-    axF.step(cols, flt_col_sums, where='mid', lw=0.8, color='black', label='aperture-weighted sum of rows')
-    axF.axhline(flt_mean, linestyle='dashed', lw=1.0, color='grey', label='mean')
-    axF.set_ylabel('counts / s', fontsize=12, labelpad=12)
-    axF.legend(fontsize=12, loc='upper right')
+    axF.set_title(f'fiber #{id} ({bundle})', fontsize=15, pad=15)
+    axF.step(cols, flt_mean_norm, where='mid', lw=0.5, color='black', label='aperture-weighted sum of fiber rows')
+    axF.set_ylabel('normalized flat', fontsize=12, labelpad=12)
+    ymin, ymax = axF.get_ylim()
+    axF.set_ylim(ymin, ymax + 0.2 * (ymax - ymin))
+    axF.legend(fontsize=10, loc='upper right')
     plt.setp(axF.get_xticklabels(), visible=False)
 
     extracted = flux * flt_mean_norm   # before dividing by the flat
     sigma = np.sqrt(np.where(np.isfinite(variance) & (variance > 0), variance, np.nan))
     axR.fill_between(cols, flux - sigma, flux + sigma, step='mid', color='grey', alpha=0.4)
-    axR.step(cols, extracted, where='mid', lw=0.8, color='lightgrey', label='extracted')
-    axR.step(cols, flux, where='mid', lw=0.8, color='black', label='flat-fielded')
-    axR.set_ylabel('counts / s', fontsize=10, labelpad=12)
-    axR.set_xlabel('wavelength column', fontsize=12, labelpad=10)
+    axR.step(cols, extracted, where='mid', lw=0.8, color='orange', alpha=0.6, zorder=1, label='extracted')
+    axR.step(cols, flux, where='mid', lw=0.8, color='tab:blue', alpha=0.3, zorder=2, label='flat-fielded')
+    axR.set_ylabel('science [counts / s]', fontsize=12, labelpad=12)
+    finite_flux = flux[np.isfinite(flux)]
+    if finite_flux.size:
+        axR.set_ylim(-1, np.nanpercentile(finite_flux, 99.9))
     axR.legend(fontsize=10, loc='upper right')
+    plt.setp(axR.get_xticklabels(), visible=False)
+
+    axG.fill_between(cols, 0, gpm_per_col, step='mid', color='grey', alpha=0.8)
+    axG.set_ylim(0, gpm_per_col.max() + 1)
+    axG.set_ylabel('# good pixels', fontsize=8, labelpad=15)
+    axG.set_xlabel('wavelength column', fontsize=12, labelpad=10)
+    axG.set_xlim(cols[0], cols[-1])
 
     plot_dir = get_plot_dir(work, 'extracted_spectra')
     out_file = os.path.join(plot_dir, '{0}_flat_response_fibre{1}.png'.format(work['file'], id))
@@ -724,7 +731,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
                 n_cols = valid.shape[-1]
                 aperture_weight = valid.reshape(n_rows, n_sub_rows, n_cols).mean(axis=1)
                 flt_2D = flt[r_min:r_max, :]
-                plot_flat_throughput_smoothing(work, id, traces[id].get('type', 'object'), flt_2D, aperture_weight, fibres[id], variances[id])
+                plot_flat_fielding(work, id, traces[id].get('type', 'object'), flt_2D, aperture_weight, fibres[id], variances[id], good_pixels[id])
 
     return fibres, good_pixels, variances
 
