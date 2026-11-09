@@ -927,6 +927,9 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     # Reset columns in work dictionary
     work['cols'] = len(we)
 
+    # Band (from GRTILT), used to pick a per-band continuum fit order
+    work['band'] = work['continuum']['grtilt_bands'].get(str(float(hdu[PRIMARY].header['GRTILT'])), work['continuum']['default_band'])
+
     # Build the catalog-based skyline mask now that 'we' and 'specres_fit' are both set
     work['skyline_mask'] = build_skyline_mask(work, log)
     if work['skyline_mask'] is None:
@@ -1669,9 +1672,14 @@ def fit_continuum(key, tag, id, xarr, yarr, mask, work, log, yerr=None, plot=Fal
                     with_header=False)
         return None
 
+    fit_cfg = work['continuum'][key]['fit']
+    band_polyorder = work['continuum'][key].get('band_polyorder')
+    if band_polyorder:
+        fit_cfg = dict(fit_cfg, order=band_polyorder[work['band']])
+
     try:
         # Fit continuum -- yerr (if given) weights the fit and lets cf.err_at() propagate its uncertainty
-        cf = Fit1D(xarr[mask], ysig[mask], yerr=yerr[mask] if yerr is not None else None, **work['continuum'][key]['fit'])
+        cf = Fit1D(xarr[mask], ysig[mask], yerr=yerr[mask] if yerr is not None else None, **fit_cfg)
     except SALTError:
         log.message('   - {0} {1}: continuum fit failed (SVD); skipping'.format(tag, id),
                     with_header=False)
@@ -3461,6 +3469,7 @@ def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, mask, work, log):
     # Set title dictionary
     title_dict = {'file': work['file'],
                   **work['continuum'][key]['fit'],
+                  'order': cf.order,
                   'tag': tag.capitalize(),
                   'id': id}
     # Set title

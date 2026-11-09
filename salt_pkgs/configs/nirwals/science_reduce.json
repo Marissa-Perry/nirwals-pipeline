@@ -196,7 +196,8 @@
         },
         "sci": {
             "sigma_clip": {},
-            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 2, "niter": 10},
+            "fit": {"function": "legendre", "low_reject": 3, "high_reject": 2, "niter": 10},
+            "band_polyorder": {"Y": 3, "J": 6, "other": 3},
             "notes": [
                 "a. row masking is done for the determined row mask which takes into account the curvature of the rectification;",
                 "b. all row masks constitute 'image_mask' which is used to mask columns in spectral channels fit"
@@ -204,11 +205,14 @@
         },
         "sky_bundle": {
             "sigma_clip": {},
-            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 2, "niter": 5},
+            "fit": {"function": "legendre", "low_reject": 3, "high_reject": 2, "niter": 5},
+            "band_polyorder": {"Y": 3, "J": 6, "other": 3},
             "notes": [
                 "a. fits the sky-bundle's median spectrum, one fit per exposure (science, sky)"
             ]
-        }
+        },
+        "grtilt_bands": {"29.5": "Y", "37.0": "J"},
+        "default_band": "other"
     },
 
     "spectral_channels": {
