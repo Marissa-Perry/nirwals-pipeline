@@ -157,7 +157,7 @@
 
     "smooth": {
         "arc": {"window_length": 5, "polyorder": 3},
-        "flat_throughput": {"function": "legendre", "order": 6, "low_reject": 3, "high_reject": 2, "niter": 5}
+        "flat_throughput": {"function": "legendre", "order": 12, "low_reject": 2, "high_reject": 2, "niter": 5}
     },
     "specres":{
         "height_sigma": 5,
@@ -196,7 +196,7 @@
         },
         "sci": {
             "sigma_clip": {},
-            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 3, "niter": 10},
+            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 2, "niter": 10},
             "notes": [
                 "a. row masking is done for the determined row mask which takes into account the curvature of the rectification;",
                 "b. all row masks constitute 'image_mask' which is used to mask columns in spectral channels fit"
@@ -204,7 +204,7 @@
         },
         "sky_bundle": {
             "sigma_clip": {},
-            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 3, "niter": 5},
+            "fit": {"function": "legendre", "order": 3, "low_reject": 3, "high_reject": 2, "niter": 5},
             "notes": [
                 "a. fits the sky-bundle's median spectrum, one fit per exposure (science, sky)"
             ]
@@ -227,7 +227,7 @@
         ],
         "n_sigma": 3,
         "n_iter": 3,
-        "residual_sigma": 5,
+        "residual_sigma": 2,
         "continuum": {
             "notes": [
                 "a. the sky-frame continuum is scaled by a wavelength-dependent ratio of continuum fits to the sky-bundle's median spectrum (science/sky);",
