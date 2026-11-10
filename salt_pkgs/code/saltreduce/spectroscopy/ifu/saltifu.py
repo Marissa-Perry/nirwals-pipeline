@@ -589,7 +589,7 @@ def plot_flat_fielding(work, id, fibre_type, flt_2D, aperture_weight, flux, vari
     axF.set_ylabel('normalized flat', fontsize=12, labelpad=12)
     ymin, ymax = axF.get_ylim()
     axF.set_ylim(ymin, ymax + 0.2 * (ymax - ymin))
-    axF.legend(fontsize=10, loc='upper right')
+    axF.legend(fontsize=10, loc='upper left')
     plt.setp(axF.get_xticklabels(), visible=False)
 
     extracted = flux * flt_mean_norm   # before dividing by the flat
@@ -598,13 +598,13 @@ def plot_flat_fielding(work, id, fibre_type, flt_2D, aperture_weight, flux, vari
     axR.step(cols, extracted, where='mid', lw=0.8, color='orange', alpha=0.6, zorder=1, label='extracted')
     axR.step(cols, flux, where='mid', lw=0.8, color='tab:blue', alpha=0.3, zorder=2, label='flat-fielded')
     axR.set_ylabel('science [counts / s]', fontsize=12, labelpad=12)
-    finite_flux = flux[np.isfinite(flux)]
-    if finite_flux.size:
-        axR.set_ylim(-1, np.nanpercentile(finite_flux, 99.9))
-    axR.legend(fontsize=10, loc='upper right')
+    finite_extracted = extracted[np.isfinite(extracted)]
+    if finite_extracted.size:
+        axR.set_ylim(-2, np.nanpercentile(finite_extracted, 99.9))
+    axR.legend(fontsize=10, loc='upper left')
     plt.setp(axR.get_xticklabels(), visible=False)
 
-    axG.fill_between(cols, 0, gpm_per_col, step='mid', color='grey', alpha=0.8)
+    axG.fill_between(cols, 0, gpm_per_col, step='mid', color='grey', alpha=0.6)
     axG.set_ylim(0, gpm_per_col.max() + 1)
     axG.set_ylabel('# good pixels', fontsize=8, labelpad=15)
     axG.set_xlabel('wavelength column', fontsize=12, labelpad=10)
