@@ -988,7 +988,7 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     if work['exp_type'] == 'science':
         # Subtract sky (object-bundle fibers only)
         sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image, variance_image_sky_sub = subtract_sky(
-            hdu, cf_image, cs_image, sf_image, sky_bundle_mask, variance_image, work, log)
+            hdu, cf_image, cs_image, sf_image, sky_bundle_mask, variance_image, gpcnt_image, list(fibres.keys()), work, log)
         skycorr_ss = sky_cs_scaled
         skycorr_ssc = skycorr_ss
         if sky_cs_scaled is not None and sky_cf_image is not None:
@@ -1940,7 +1940,7 @@ def fit_sky_bundle_continuum(sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs
     return med_sci, med_sky, obj_fit_curve, sky_fit_curve, obj_fit_err, sky_fit_err, valid
 
 # ---------------------------------------------------------------------------- #
-def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask, sci_variance_image, work, log):
+def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask, sci_variance_image, gpcnt_image, fiber_ids, work, log):
 # ---------------------------------------------------------------------------- #
 
     # Add message to log
@@ -2197,6 +2197,34 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     variance_image_sky_sub = (sci_variance_image
                                + crop_to_native_width(continuum_scale_variance, sci_variance_image.shape[1])
                                + crop_to_native_width(skyline_subtraction_variance, sci_variance_image.shape[1]))
+
+    # 1D diagnostic plots: 5 brightest + 5 faintest object-bundle fibers, through each sky-subtraction stage
+    n_native = sci_variance_image.shape[1]
+    wave_native = work['we'][-n_native:]
+    raw_flux_native = crop_to_native_width(sci_cs_image + sci_cf_image, n_native)[obj_bundle_mask]
+    sky_continuum_native = crop_to_native_width(sky_cf_image_scaled, n_native)[obj_bundle_mask]
+    science_continuum_native = crop_to_native_width(sci_cf_image, n_native)[obj_bundle_mask]
+    skyline_flux_native = crop_to_native_width(sci_image + sci_cf_image, n_native)[obj_bundle_mask]
+    final_flux_native = crop_to_native_width(sci_image_with_cont, n_native)[obj_bundle_mask]
+    raw_variance_native = sci_variance_image[obj_bundle_mask]
+    skyline_variance_native = raw_variance_native + crop_to_native_width(skyline_subtraction_variance, n_native)[obj_bundle_mask]
+    final_variance_native = variance_image_sky_sub[obj_bundle_mask]
+    gpcnt_native = gpcnt_image[obj_bundle_mask]
+    fiber_ids_obj = np.array(fiber_ids)[obj_bundle_mask]
+
+    brightness = np.nanmedian(np.where(raw_flux_native > 0, raw_flux_native, np.nan), axis=1)
+    order = np.argsort(brightness)
+    faint_idx = order[:5]
+    bright_idx = order[-5:][::-1]
+    for rank_label, idx_list in (('faintest', faint_idx), ('brightest', bright_idx)):
+        for rank, i in enumerate(idx_list, start=1):
+            sky_subtraction_1d_diagnostic_plot(
+                work, fiber_ids_obj[i], '{0} {1}'.format(rank_label, rank), wave_native,
+                raw_flux_native[i], raw_variance_native[i],
+                sky_continuum_native[i], science_continuum_native[i],
+                skyline_flux_native[i], skyline_variance_native[i],
+                final_flux_native[i], final_variance_native[i],
+                gpcnt_native[i])
 
     return (sci_image[obj_bundle_mask], sci_image_with_cont[obj_bundle_mask], sky_cs_scaled[obj_bundle_mask],
             sky_cf_image_scaled[obj_bundle_mask], variance_image_sky_sub[obj_bundle_mask])
@@ -2525,6 +2553,78 @@ def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask, obj_bundle_m
     filepath = os.path.join(plot_dir, png_file)
     # Save plot as png
     plt.savefig(filepath, dpi=500, format='png', bbox_inches="tight")
+    plt.close()
+
+    return
+
+
+# ---------------------------------------------------------------------------- #
+def sky_subtraction_1d_diagnostic_plot(work, fiber_id, rank_label, wave, raw_flux, raw_var,
+                                        sky_continuum_fit, science_continuum_fit,
+                                        skyline_flux, skyline_var, final_flux, final_var, gpm_per_col):
+# ---------------------------------------------------------------------------- #
+    '''
+    Sky subtraction products for 5 brightest and 5 faintest 1D-fiber spectra.
+    '''
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(10, 11), sharex=True,
+                                              gridspec_kw={'height_ratios': [3, 3, 3, 1], 'hspace': 0.3})
+
+    pad_frac = 0.02
+
+    sigma1 = np.sqrt(np.where(np.isfinite(raw_var) & (raw_var > 0), raw_var, np.nan))
+    ax1.fill_between(wave, raw_flux - sigma1, raw_flux + sigma1, step='mid', color='grey', alpha=0.3, linewidth=0.6, zorder=0)
+    ax1.step(wave, raw_flux, where='mid', color='black', lw=0.8, zorder=1)
+    ymin1, ymax1 = np.nanmin(raw_flux), np.nanmax(raw_flux)
+    pad1 = pad_frac * (ymax1 - ymin1)
+    ylim1 = (ymin1 - pad1, ymax1 + pad1)
+    ax1.set_ylim(*ylim1)
+    step1 = 5
+    for y in np.arange(np.floor(ylim1[0] / step1) * step1, ylim1[1] + step1, step1):
+        ax1.axhline(y, color='grey', ls='dashed', lw=0.5, alpha=0.4, zorder=0)
+    ax1.set_ylabel('counts / s', fontsize=15, labelpad=15)
+    ax1.set_title('Extracted', fontsize=18, pad=15)
+    plt.setp(ax1.get_xticklabels(), visible=False)
+
+    sigma2 = np.sqrt(np.where(np.isfinite(skyline_var) & (skyline_var > 0), skyline_var, np.nan))
+    sigma3 = np.sqrt(np.where(np.isfinite(final_var) & (final_var > 0), final_var, np.nan))
+    ymin2, ymax2 = np.nanmin(skyline_flux), np.nanmax(skyline_flux)
+    pad2 = 0.1 * (ymax2 - ymin2)
+    shared_ylim = (ymin2 - pad2, ymax2 + pad2)
+    step23 = 1
+    hlines23 = np.arange(np.floor(shared_ylim[0] / step23) * step23, shared_ylim[1] + step23, step23)
+
+    for ax, flux, sigma, title in ((ax2, skyline_flux, sigma2, 'Skyline subtracted'),
+                                    (ax3, final_flux, sigma3, 'Skyline & sky-continuum subtracted')):
+        ax.fill_between(wave, flux - sigma, flux + sigma, step='mid', color='grey', alpha=0.3, linewidth=0.6, zorder=0)
+        ax.step(wave, flux, where='mid', color='black', lw=0.8, zorder=1)
+        ax.set_ylim(*shared_ylim)
+        for y in hlines23:
+            ax.axhline(y, color='grey', ls='dashed', lw=0.5, alpha=0.4, zorder=0)
+        if ax is ax2:
+            ax.plot(wave, sky_continuum_fit, color='#7EC8BC', ls='dashed', alpha=0.95, lw=1.5,
+                    zorder=1, label='sky-continuum scaled')
+            ax.plot(wave, science_continuum_fit, color='#F25F5C', ls='dashed', alpha=0.95, lw=1.5,
+                    zorder=1, label='science continuum fit')
+            ax.legend(fontsize=10, loc='upper right')
+        ax.set_ylabel('counts / s', fontsize=15, labelpad=15)
+        ax.set_title(title, fontsize=18, pad=15)
+        plt.setp(ax.get_xticklabels(), visible=False)
+
+    ax4.fill_between(wave, 0, gpm_per_col, step='mid', color='grey', alpha=0.5)
+    ax4.set_ylim(0, gpm_per_col.max() + 1)
+    ax4.set_ylabel('# good pixels', fontsize=12, labelpad=15)
+    ax4.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
+    ax4.set_xlim(wave[0], wave[-1])
+
+    pos3, pos4 = ax3.get_position(), ax4.get_position()
+    ax4.set_position([pos4.x0, pos3.y0 - pos4.height, pos4.width, pos4.height])
+
+    fig.suptitle('Fiber #{0} ({1})'.format(fiber_id, rank_label), fontsize=18, y=0.965)
+
+    plot_dir = get_plot_dir(work, 'sky_subtraction')
+    png_file = '{0}_sky_subtraction_{1}_fibre{2}.png'.format(work['file'], rank_label.replace(' ', '_'), fiber_id)
+    filepath = os.path.join(plot_dir, png_file)
+    plt.savefig(filepath, dpi=500, format='png', bbox_inches='tight')
     plt.close()
 
     return
