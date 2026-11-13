@@ -2391,9 +2391,9 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
          The applied combined scale (scale_fiber x scale_wave) and its effect: 
          sky before scaling, the applied scale factor, and the sky-subtracted science before vs after scaling 
     '''
-    import matplotlib as mpl
+    from matplotlib.colors import LinearSegmentedColormap
     from mpl_toolkits.axes_grid1 import make_axes_locatable
- 
+
     # Image dimensions and pixel-index axes
     n_fibre, n_chan = scaling_image_masked.shape
     fibre_idx = np.arange(n_fibre)
@@ -2406,9 +2406,10 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     # Output directory / filename stub (same pattern as the other plots)
     stub = os.path.join(get_plot_dir(work, 'sky_subtraction'), work['file'])
  
-    # Sequential colormap whose 'bad' (NaN) value renders white, for the panels
-    # where interline regions are masked out
-    cmap_nan = mpl.colormaps['copper'].copy()
+    pastel_hex = ['#bd5e68', '#ffffba']
+    custom_pastel = LinearSegmentedColormap.from_list('custom_pastel', pastel_hex)
+
+    cmap_nan = custom_pastel.copy()
     cmap_nan.set_bad('white')
  
     # Helper: give every panel its own colorbar axis so stacked panels keep an
@@ -2483,7 +2484,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
  
     fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
  
-    im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap='copper')
+    im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap=custom_pastel)
     # axs[0].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[0].set_title('(A)  continuum-subtracted sky', fontsize=16, pad=5)
     colorbar_axis(axs[0], im0, label='counts / s')
@@ -2493,12 +2494,12 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     axs[1].set_title('(B)  scale factor', fontsize=16, pad=5)
     colorbar_axis(axs[1], im1, label='scale factor')
  
-    im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='copper')
+    im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap=custom_pastel)
     # axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[2].set_title(r'(C)  science $-$ unscaled sky', fontsize=16, pad=5)
     colorbar_axis(axs[2], im2, label='counts / s')
  
-    im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap='copper')
+    im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap=custom_pastel)
     # axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[3].set_title(r'(D)  science $-$ scaled sky', fontsize=16, pad=5)
     axs[3].set_xlabel('spectral channel', fontsize=14, labelpad=12)

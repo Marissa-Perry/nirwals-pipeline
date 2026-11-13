@@ -539,11 +539,11 @@ def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_as
     asym_1_lo, asym_1_hi = np.percentile(asym_1_values, [16, 84])
     sym_lo, sym_hi = np.percentile(sym_values, [16, 84])
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 5), sharey=True, gridspec_kw={'width_ratios': [3, 1], 'wspace': 0})
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 5), sharey=True, gridspec_kw={'width_ratios': [5, 1], 'wspace': 0})
 
     ax1.axvline(med, color='grey', ls='dotted', lw=1.2)
     ax1.axvspan(med - sig, med + sig, color='grey', alpha=0.3)
-    ax1.text(med + 0.005, 0.062, 'dark-current\nbackground', color='grey', ha='center', fontsize=13)
+    ax1.text(med + 0.005, 0.062, 'dark-current\nbackground', color='grey', ha='center', fontsize=12)
 
     # 16th-84th percentile spread of each measured distribution
     xlim_min, xlim_max = 10**-(2.8), 10**(4.8)   # x-axis limits 
@@ -551,18 +551,18 @@ def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_as
     log_xlim_min = np.log10(xlim_min)
     log_xlim_max = np.log10(xlim_max)
     xmin_fraction = (log_xmin_data - log_xlim_min) / (log_xlim_max - log_xlim_min)
-    ax1.axhspan(sym_lo, sym_hi, xmin=xmin_fraction, color='#9a8c98', alpha=0.12)
-    ax1.axhspan(asym_3_lo, asym_3_hi, xmin=xmin_fraction, color='#FD8721', alpha=0.12)
-    ax1.axhspan(asym_1_lo, asym_1_hi, xmin=xmin_fraction, color='#577562', alpha=0.12)
-    ax1.axhline(used_asym_3, xmin=xmin_fraction, color='#FD8721', ls='--', lw=1.2, zorder=5)
-    ax1.axhline(used_asym_1, xmin=xmin_fraction, color='#577562', ls='--', lw=1.2, zorder=6)
-    ax1.axhline(np.median(sym_values), xmin=xmin_fraction, color='#9a8c98', ls='--', lw=1.2, zorder=4)
+    ax1.axhspan(sym_lo, sym_hi, xmin=xmin_fraction, color='#a1899d', alpha=0.15)
+    ax1.axhspan(asym_3_lo, asym_3_hi, xmin=xmin_fraction, color='#ffa55a', alpha=0.15)
+    ax1.axhspan(asym_1_lo, asym_1_hi, xmin=xmin_fraction, color='#86aa8d', alpha=0.15)
+    ax1.axhline(used_asym_3, xmin=xmin_fraction, color='#ffa55a', ls='--', lw=1.2, zorder=5)
+    ax1.axhline(used_asym_1, xmin=xmin_fraction, color='#86aa8d', ls='--', lw=1.2, zorder=6)
+    ax1.axhline(np.median(sym_values), xmin=xmin_fraction, color='#a1899d', ls='--', lw=1.2, zorder=4)
 
-    ax1.scatter(central_values_1, sym_values, s=8, alpha=0.1, color='#9a8c98')
-    ax1.scatter(central_values, asym_3_values, s=8, alpha=0.05, color='#fec89a')
-    ax1.scatter(central_values_1, asym_1_values, s=8, alpha=0.15, color='#B9CBC0')
-    ax1.axvline(med + bpm_thresh_sigma * sig, color='black', lw=1.2)
-    ax1.text(med + bpm_thresh_sigma * sig + 0.3, 0.062, fr'{bpm_thresh_sigma}$\sigma$'+'\n'+'hot pixel', color='black', ha='center', fontsize=13)
+    ax1.scatter(central_values_1, sym_values, s=8, alpha=0.15, color='#a1899d')
+    ax1.scatter(central_values, asym_3_values, s=8, alpha=0.08, color='#ffa55a')
+    ax1.scatter(central_values_1, asym_1_values, s=8, alpha=0.3, color='#B9CBC0')
+    ax1.axvline(med + bpm_thresh_sigma * sig, color='grey', ls='dashed', lw=1.2)
+    ax1.text(med + bpm_thresh_sigma * sig + 0.3, 0.062, fr'{bpm_thresh_sigma}$\sigma$'+'\n'+'hot pixel', color='grey', ha='center', fontsize=12)
     ax1.set_xscale('log')
     ax1.set_xlabel('pixel value [counts/s]', fontsize=16, labelpad=15)
     ax1.set_ylabel(r'$\alpha$', fontsize=20, labelpad=15)
@@ -574,18 +574,18 @@ def alpha_calibration_diagnostic_plot(dark, med, sig, bpm_thresh_sigma, alpha_as
 
     # right panel: alpha distribution
     bins = np.linspace(-0.005, 0.08, 100)
-    sym_counts, _, _ = ax2.hist(sym_values, bins=bins, orientation='horizontal', color='#9a8c98', alpha=0.5)
-    asym_3_counts, _, _ = ax2.hist(asym_3_values, bins=bins, orientation='horizontal', color='#fec89a', alpha=0.5)
-    asym_1_counts, _, _ = ax2.hist(asym_1_values, bins=bins, orientation='horizontal', color='#B9CBC0', alpha=0.5)
-    ax2.axhline(np.median(sym_values), color='#9a8c98', ls='--', lw=1.2)
-    ax2.axhline(used_asym_3, color='#FD8721', ls='--', lw=1.2)
-    ax2.axhline(used_asym_1, color='#577562', ls='--', lw=1.2)
-    text_x_pos = max(sym_counts.max(), asym_3_counts.max(), asym_1_counts.max()) * 1.30   # 30% buffer
-    ax2.text(text_x_pos, used_asym_3, fr'$\alpha_{{\rm asym,3}}={used_asym_3:.3f}$', color='#FD8721', ha='left', fontsize=12)
-    ax2.text(text_x_pos, used_asym_1, fr'$\alpha_{{\rm asym,1}}={used_asym_1:.3f}$', color='#577562', ha='left', fontsize=12)
-    ax2.text(text_x_pos, np.median(sym_values), fr'$\alpha_{{\rm sym}}={np.median(sym_values):.3f}$', color='#9a8c98', ha='left', fontsize=12)
+    sym_counts, _, _ = ax2.hist(sym_values, bins=bins, orientation='horizontal', color='#a1899d', alpha=0.7)
+    asym_3_counts, _, _ = ax2.hist(asym_3_values, bins=bins, orientation='horizontal', color='#ffa55a', alpha=0.7)
+    asym_1_counts, _, _ = ax2.hist(asym_1_values, bins=bins, orientation='horizontal', color='#B9CBC0', alpha=0.7)
+    ax2.axhline(np.median(sym_values), color='#a1899d', ls='--', lw=1.2)
+    ax2.axhline(used_asym_3, color='#ffa55a', ls='--', lw=1.2)
+    ax2.axhline(used_asym_1, color='#86aa8d', ls='--', lw=1.2)
+    label_transform = ax2.get_yaxis_transform()   # x in axes fraction (1.0 = right edge), y in data coords
+    ax2.text(1.05, used_asym_3, fr'$\alpha_{{\rm asym,3}}={used_asym_3:.3f}$', color='#ffa55a', ha='left', fontsize=12, transform=label_transform)
+    ax2.text(1.05, used_asym_1, fr'$\alpha_{{\rm asym,1}}={used_asym_1:.3f}$', color='#86aa8d', ha='left', fontsize=12, transform=label_transform)
+    ax2.text(1.05, np.median(sym_values), fr'$\alpha_{{\rm sym}}={np.median(sym_values):.3f}$', color='#a1899d', ha='left', fontsize=12, transform=label_transform)
     ax2.set_xlabel('# of pixels', fontsize=16, labelpad=15)
-    ax2.set_xticks([0, 1500, 3000])
+    ax2.set_xticks([0, 500])
     plt.setp(ax2.get_yticklabels(), visible=False)
     ax2.tick_params(labelsize=14)
 
