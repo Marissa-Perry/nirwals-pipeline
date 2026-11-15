@@ -344,7 +344,7 @@ def generate_bpm(obs_date, log, **kwargs):
         bpm_flat[illum] = (np.abs(z[illum]) > bpm_thresh_sigma * z_scatter)  # identifying bad pixels
         bpm[bpm_flat] = 1.
         flat_bpm_perc = 100 * bpm_flat.sum() / illum.sum()
-        log.message('   - flat BPM: {0:.2f}% flagged', with_header=False)
+        log.message('   - flat BPM: {0:.2f}% flagged'.format(flat_bpm_perc), with_header=False)
 
         # ---------- diagnostic: noise-normalised flat deviation ----------
         zvals = z[illum]
@@ -641,8 +641,6 @@ def prepare_flat_fit(obs_date, log, **kwargs):
         # Open flat field file
         with fits.open(flat_file, mode='append') as hdulist:
 
-            # using raw master flat, not dark subtracted, for fiber tracing
-
             # Check if FITEXT already exists
             if 'FITEXT' in hdulist[SCI].header:
                 # Check if recalc is not needed
@@ -718,7 +716,7 @@ def fit_continuum(image, config):
 
         valid = cm
 
-        # too little real signal for this polynomial order (e.g. an unilluminated edge row) -- leave continuum at 0
+        # If too little real signal for this polynomial order, leave continuum at 0
         if np.count_nonzero(f[valid]) <= 2 * continuum_fit['order']:
             continue
 
