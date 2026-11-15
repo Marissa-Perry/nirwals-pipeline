@@ -855,6 +855,8 @@ def reduce_reference(hdu, solutions, traces, fibres, work, log):
 
     # Rectify extracted fibres
     rectify_fibres(traces, fibres, ws, wf, work, log)
+    work['good_pixels'] = {fid: orient_fibre_flux(f) for fid, f in work['good_pixels'].items()}
+    work['variances'] = {fid: orient_fibre_flux(f) for fid, f in work['variances'].items()}
 
     # Stack fibre flux image: fibre type 'all'
     fibre_image = stack_fibre_image(traces, fibres)
@@ -949,6 +951,8 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
 
     # Rectify extracted fibres
     rectify_fibres(traces, fibres, ws, wf, work, log)
+    work['good_pixels'] = {fid: orient_fibre_flux(f) for fid, f in work['good_pixels'].items()}
+    work['variances'] = {fid: orient_fibre_flux(f) for fid, f in work['variances'].items()}
     # Stack fibre flux image: fibre type 'all'
     fibre_image = stack_fibre_image(traces, fibres)
     # Stack good pixels count image: fibre type 'all'
@@ -2228,7 +2232,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     fiber_ids_obj = np.array(fiber_ids)[obj_bundle_mask]
 
     brightness = np.nanmedian(np.where(raw_flux_native > 0, raw_flux_native, np.nan), axis=1)
-    order = np.argsort(brightness)
+    order = np.argsort(np.where(np.isfinite(brightness), brightness, -np.inf))
     faint_idx = order[:5]
     bright_idx = order[-5:][::-1]
     for rank_label, idx_list in (('faintest', faint_idx), ('brightest', bright_idx)):
@@ -2593,7 +2597,8 @@ def sky_subtraction_1d_diagnostic_plot(work, fiber_id, rank_label, wave, raw_flu
     sigma1 = np.sqrt(np.where(np.isfinite(raw_var) & (raw_var > 0), raw_var, np.nan))
     ax1.fill_between(wave, raw_flux - sigma1, raw_flux + sigma1, step='mid', color='grey', alpha=0.3, linewidth=0.6, zorder=0)
     ax1.step(wave, raw_flux, where='mid', color='black', lw=0.8, zorder=1)
-    ymin1, ymax1 = np.nanmin(raw_flux), np.nanmax(raw_flux)
+    finite1 = raw_flux[np.isfinite(raw_flux)]
+    ymin1, ymax1 = np.nanpercentile(finite1, [0.5, 99.5]) if finite1.size else (0.0, 1.0)
     pad1 = pad_frac * (ymax1 - ymin1)
     ylim1 = (ymin1 - pad1, ymax1 + pad1)
     ax1.set_ylim(*ylim1)
@@ -2606,7 +2611,8 @@ def sky_subtraction_1d_diagnostic_plot(work, fiber_id, rank_label, wave, raw_flu
 
     sigma2 = np.sqrt(np.where(np.isfinite(skyline_var) & (skyline_var > 0), skyline_var, np.nan))
     sigma3 = np.sqrt(np.where(np.isfinite(final_var) & (final_var > 0), final_var, np.nan))
-    ymin2, ymax2 = np.nanmin(skyline_flux), np.nanmax(skyline_flux)
+    finite2 = skyline_flux[np.isfinite(skyline_flux)]
+    ymin2, ymax2 = np.nanpercentile(finite2, [0.5, 99.5]) if finite2.size else (0.0, 1.0)
     pad2 = 0.1 * (ymax2 - ymin2)
     shared_ylim = (ymin2 - pad2, ymax2 + pad2)
     step23 = 1
