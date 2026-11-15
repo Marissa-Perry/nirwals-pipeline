@@ -123,6 +123,8 @@ def group_frames(files, predicate, group_keys):
 def combine_group(group_files, out_path):
     """
     Mean-combine the SCI extension across group_files, inheriting the header of the first file.
+
+    Note: these master files are not dark subtracted
     """
     stack = [np.asarray(fits.getdata(gf, SCI), dtype=float) for gf in group_files]
     avg = np.mean(np.stack(stack, axis=0), axis=0)
@@ -256,7 +258,6 @@ def combine_flats(obs_date):
     for key, gfiles in sorted(groups.items()):
         out = os.path.join(prddir, master_flat_name(obs_date, gfiles[0]))
         combine_group(gfiles, out)
-        dark_subtract(out, out, obs_date, prddir, inplace=True)
         print(f'   - exposure block={key}: {len(gfiles)} frame(s) -> {os.path.basename(out)}')
 
 
@@ -290,7 +291,7 @@ def set_dark_file(exp_time, prd_dir, obs_date, subtract=True, tol=5.0):
     return best
 
 
-def dark_subtract(in_path, out_path, obs_date, pdir, inplace):
+def _dark_subtract(in_path, out_path, obs_date, pdir, inplace):
     """
     Subtract the EXPTIME-matched master dark from raw SCI.
     Returns 1 if a subtraction was written, 0 if skipped.
@@ -338,10 +339,10 @@ def dark_subtract_all(obs_date, prefix):
         with fits.open(f) as hdu:
             exptype = read_header_key(hdu, EXPTYPE)
         if is_dark(exptype) or is_flat(exptype):
-            continue  # darks aren't subtracted; flats are dark-subtracted in combine_flats instead
+            continue  # darks aren't subtracted; flats are handled via the master flat
         prddir = product_dir(obs_date)
         out = os.path.join(prddir, prefix + os.path.basename(f))
-        ok = dark_subtract(f, out, obs_date, prddir, inplace=False)
+        ok = _dark_subtract(f, out, obs_date, prddir, inplace=False)
         n_done += ok
         n_skip += (1 - ok)
 
