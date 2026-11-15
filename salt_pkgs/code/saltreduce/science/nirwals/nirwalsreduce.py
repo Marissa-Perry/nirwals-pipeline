@@ -1607,6 +1607,11 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log, sky_bundle_
     if work['output']['plot_continuum_fit']:
         log.message('   - diagnostic plots for continuum fit', with_header=False)
 
+    # Counts for a single post-loop summary line
+    min_pts = work['continuum'][key].get('min_points', 12)
+    skipped_too_few = 0
+    skipped_fit_failed = 0
+
     # Loop for image rows...
     for i in range(rows):
 
@@ -1625,13 +1630,17 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log, sky_bundle_
         plot = i in diagnostic_rows
 
         # Fit continuum
-        cf = fit_continuum(key, 'row', i + 1, xarr, yarr, row_fit_mask, work, log, plot=plot)
+        cf = fit_continuum(key, 'row', i + 1, xarr, yarr, row_fit_mask, work, log, plot=plot, quiet=True)
 
         # if unable to dertermine continuum with skylines masked, try again with just edge mask
         if cf is None:
-            cf = fit_continuum(key, 'row', i + 1, xarr, yarr, edges_row_mask, work, log, plot=plot)
+            cf = fit_continuum(key, 'row', i + 1, xarr, yarr, edges_row_mask, work, log, plot=plot, quiet=True)
         # if it still fails ...
         if cf is None:
+            if int(np.count_nonzero(edges_row_mask)) < min_pts:
+                skipped_too_few += 1
+            else:
+                skipped_fit_failed += 1
             continue
 
         # Evaluate continuum fit
@@ -1644,6 +1653,10 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log, sky_bundle_
          # Set row flux minus continuum fit in continuum subtracted image array
         cs_image[i][edges_row_mask] = yarr[edges_row_mask] - cf_vals[edges_row_mask]
 
+    if skipped_too_few or skipped_fit_failed:
+        log.message('   - continuum fit: skipped {0}/{1} row(s) (too few unmasked points: {2}, fit failed: {3})'.format(
+            skipped_too_few + skipped_fit_failed, rows, skipped_too_few, skipped_fit_failed), with_header=False)
+
     # Set mask in work dictionary (ignore edges throughout the rest of the reduction, but keep skyline regions)
     work['image_mask'] = edges_image_mask
 
@@ -1653,7 +1666,7 @@ def fit_and_subtract_continuum_for_image(hdu, key, image, work, log, sky_bundle_
     return cf_image, cs_image
     
 # ---------------------------------------------------------------------------- #
-def fit_continuum(key, tag, id, xarr, yarr, mask, work, log, yerr=None, plot=False):
+def fit_continuum(key, tag, id, xarr, yarr, mask, work, log, yerr=None, plot=False, quiet=False):
 # ---------------------------------------------------------------------------- #
 
     # Check if flux must be sigma clipped
@@ -1668,8 +1681,9 @@ def fit_continuum(key, tag, id, xarr, yarr, mask, work, log, yerr=None, plot=Fal
     npts = int(np.count_nonzero(mask))
     min_pts = work['continuum'][key].get('min_points', 12)   # >= (fit order + 1), with margin
     if npts < min_pts:
-        log.message('   - {0} {1}: only {2} unmasked points; skipping'.format(tag, id, npts),
-                    with_header=False)
+        if not quiet:
+            log.message('   - {0} {1}: only {2} unmasked points; skipping'.format(tag, id, npts),
+                        with_header=False)
         return None
 
     fit_cfg = work['continuum'][key]['fit']
@@ -1681,8 +1695,9 @@ def fit_continuum(key, tag, id, xarr, yarr, mask, work, log, yerr=None, plot=Fal
         # Fit continuum -- yerr (if given) weights the fit and lets cf.err_at() propagate its uncertainty
         cf = Fit1D(xarr[mask], ysig[mask], yerr=yerr[mask] if yerr is not None else None, **fit_cfg)
     except SALTError:
-        log.message('   - {0} {1}: continuum fit failed (SVD); skipping'.format(tag, id),
-                    with_header=False)
+        if not quiet:
+            log.message('   - {0} {1}: continuum fit failed (SVD); skipping'.format(tag, id),
+                        with_header=False)
         return None
 
     # Plot continuum fit
@@ -2161,7 +2176,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image_scaled)
 
     # Diagnostic plots of the skyline and sky-continuum correction terms and their effect on the subtraction
-    skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask)
+    skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask, gpcnt_image)
     skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask, obj_bundle_mask=obj_bundle_mask)
     if scale_sky_cont:
         sky_cf_obj_mean_scaled = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
@@ -2372,10 +2387,10 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, science_spectral_su
     return
 
 # ---------------------------------------------------------------------------- #
-def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask):
+def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask, gpcnt_image):
 # ---------------------------------------------------------------------------- #
     '''
-    Diagnostic plots for the (residual-minimising) skyline scaling.
+    Diagnostic plots for the residual-minimising skyline scaling.
 
     Three figures:
 
@@ -2385,13 +2400,12 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
 
       2. {file}_skyline_scaling_fiber.png
          Fibre-dependent scale term scale_fiber (per fibre, fit across wavelengths on the wavelength-scaled sky),
-         object-bundle fibres only, with the count of skyline pixels per fibre.
+         object-bundle fibres only.
 
       3. {file}_skyline_subtraction.png
-         The applied combined scale (scale_fiber x scale_wave) and its effect: 
-         sky before scaling, the applied scale factor, and the sky-subtracted science before vs after scaling 
+         The applied combined scale (scale_fiber x scale_wave)
     '''
-    from matplotlib.colors import LinearSegmentedColormap
+    from matplotlib.colors import LinearSegmentedColormap, ListedColormap
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     # Image dimensions and pixel-index axes
@@ -2449,18 +2463,15 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     # ------------------------------------------------------------------ #
     obj_fibre_idx = fibre_idx[obj_bundle_mask]
     scale_fiber_plot = np.where(n_line_per_fibre > 0, scale_fiber, np.nan)[obj_bundle_mask]
-    n_line_per_fibre_obj = n_line_per_fibre[obj_bundle_mask]
 
-    fig, axs = plt.subplots(2, 1, figsize=(8, 4), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [4, 1]})
+    fig, ax = plt.subplots(figsize=(8, 4))
 
-    axs[0].plot(obj_fibre_idx, scale_fiber_plot, lw=1.2, color='k')
-    axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
-    axs[0].set_ylabel('scale factor', fontsize=12, labelpad=10)
-    axs[0].set_title('fibre-dependent skyline scale', fontsize=14, pad=15)
-    axs[1].fill_between(obj_fibre_idx, 0, n_line_per_fibre_obj, step='mid', color='grey', alpha=0.3)
-    axs[1].set_ylabel('# of skyline\npixels', fontsize=11, labelpad=10)
-    axs[1].set_xlabel('fiber #', fontsize=12, labelpad=12)
-    axs[1].set_xlim(0, n_fibre - 1)
+    ax.plot(obj_fibre_idx, scale_fiber_plot, lw=1.2, color='k')
+    ax.axhline(1.0, color='r', lw=0.8, ls='--')
+    ax.set_ylabel('scale factor', fontsize=12, labelpad=10)
+    ax.set_title('fibre-dependent skyline scale', fontsize=14, pad=15)
+    ax.set_xlabel('fiber #', fontsize=12, labelpad=12)
+    ax.set_xlim(0, n_fibre - 1)
 
     fig.savefig(stub + '_skyline_scaling_fiber.png', dpi=180, format='png', bbox_inches='tight')
     plt.close(fig)
@@ -2482,8 +2493,11 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     both = np.concatenate([sci_image_unscaled_sub.ravel(), sci_image_scaled_sub.ravel()])
     r0, r1 = np.nanpercentile(both, [1, 90])
  
-    fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
- 
+    bad_pixel_mask = (gpcnt_image == 0).astype(int)
+    bpm_cmap = ListedColormap(['black', 'white'])
+
+    fig, axs = plt.subplots(5, 1, figsize=(12, 12), sharex=True)
+
     im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap=custom_pastel)
     # axs[0].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[0].set_title('(A)  continuum-subtracted sky', fontsize=16, pad=5)
@@ -2493,17 +2507,21 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     # axs[1].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[1].set_title('(B)  scale factor', fontsize=16, pad=5)
     colorbar_axis(axs[1], im1, label='scale factor')
- 
+
     im2 = axs[2].imshow(sci_image_unscaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap=custom_pastel)
     # axs[2].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[2].set_title(r'(C)  science $-$ unscaled sky', fontsize=16, pad=5)
     colorbar_axis(axs[2], im2, label='counts / s')
- 
+
     im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap=custom_pastel)
     # axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[3].set_title(r'(D)  science $-$ scaled sky', fontsize=16, pad=5)
-    axs[3].set_xlabel('spectral channel', fontsize=14, labelpad=12)
     colorbar_axis(axs[3], im3, label='counts / s')
+
+    axs[4].imshow(bad_pixel_mask, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=0, vmax=1, cmap=bpm_cmap)
+    axs[4].set_title('(E)  masked bad pixels', fontsize=16, pad=5)
+    axs[4].set_xlabel('spectral channel', fontsize=14, labelpad=12)
+    colorbar_axis(axs[4])
 
     fig.supylabel('fiber #', fontsize=14, x=0.05, y=0.5)
  
@@ -3568,10 +3586,7 @@ def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, mask, work, log):
     # Set plotting dictionary: continuum_fit
     plot_dict = work['plotting']['continuum_fit'].copy()
 
-    # Set figure size and layout
-    plt.figure(1, figsize=plot_dict['figsize'], tight_layout=True)
-    # Set subplot
-    ax = plt.subplot(1, 1, 1)
+    fig, (ax, ax_gpm) = plt.subplots(2, 1, figsize=plot_dict['figsize'], sharex=True, gridspec_kw={'height_ratios': [4, 1], 'hspace': 0})
 
     # highlight columns excluded from the fit (e.g. skylines), same style as sky_continuum_scaling_plot
     change = np.diff(np.concatenate([[0], (~mask).astype(int), [0]]))
@@ -3587,13 +3602,16 @@ def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, mask, work, log):
     plot_dict['xlim']['min'] = xarr.min()
     plot_dict['xlim']['max'] = xarr.max()
     # - ylim: zoom to the continuum fit's own range, not the raw (noisier) spectrum's
-    plot_dict['ylim']['min'] = cf_vals.min()
-    plot_dict['ylim']['max'] = cf_vals.max()
+    cf_finite = cf_vals[np.isfinite(cf_vals)]
+    if cf_finite.size == 0:
+        cf_finite = yarr[np.isfinite(yarr)]
+    plot_dict['ylim']['min'] = cf_finite.min() if cf_finite.size else np.nan
+    plot_dict['ylim']['max'] = cf_finite.max() if cf_finite.size else np.nan
     # Set plot axis properties
     set_plot_axis_properties(ax, **plot_dict)
+    ax.set_xlabel('')
+    plt.setp(ax.get_xticklabels(), visible=False)
 
-    # Plot spectrum - full
-    ax.plot(xarr, yarr, **plot_dict['spectrum'])
     # Plot spectrum - clipped
     ax.plot(xarr, ysig, **plot_dict['clip'])
     # Plot continuum fit
@@ -3605,6 +3623,12 @@ def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, mask, work, log):
     # Set legend
     set_legend(ax, plot_dict)
 
+    ax_gpm.step(xarr, mask, where='mid', color='grey', alpha=0.8, linewidth=0.6)
+    ax_gpm.fill_between(xarr, 0, mask, step='mid', color='black', alpha=0.15)
+    ax_gpm.set_ylabel('good pixels', fontsize=plot_dict['label_fontsize'], labelpad=plot_dict['labelpad'])
+    ax_gpm.set_xlabel(plot_dict['xlabel'], fontsize=plot_dict['label_fontsize'], labelpad=plot_dict['labelpad'])
+    ax_gpm.set_xlim(xarr.min(), xarr.max())
+
     # Set title dictionary
     title_dict = {'file': work['file'],
                   **work['continuum'][key]['fit'],
@@ -3613,7 +3637,7 @@ def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, mask, work, log):
                   'id': id}
     # Set title
     title = plot_dict['title_frmt'].format(**title_dict)
-    plt.title(title, fontsize=20, y=plot_dict['title_ypos'], pad=15)
+    ax.set_title(title, fontsize=18, pad=15)
 
     # Save figure
     if plot_dict['save']:
@@ -3624,10 +3648,7 @@ def plot_continuum_fit(key, tag, id, xarr, yarr, ysig, cf, mask, work, log):
     # Show figure
     if plot_dict['show']:
         plt.show()
-    # Clear current figure
-    plt.clf()
-    # Close current figure window (if any)
-    plt.close()
+    plt.close(fig)
 
     return
 
@@ -3639,14 +3660,16 @@ def set_plot_axis_properties(ax, **plot_dict):
     if plot_dict['xlabel']: ax.set_xlabel(plot_dict['xlabel'], fontsize=plot_dict.get('label_fontsize'), labelpad=plot_dict.get('labelpad'))
     # Set y label
     if plot_dict['ylabel']: ax.set_ylabel(plot_dict['ylabel'], fontsize=plot_dict.get('label_fontsize'), labelpad=plot_dict.get('labelpad'))
-    # Set x limits
+    # Set x limits (skip if NaN/Inf, e.g. from an all-bad row -- keep matplotlib's autoscale)
     xmin = plot_dict['xlim']['min'] * plot_dict['xlim']['min_factor']
     xmax = plot_dict['xlim']['max'] * plot_dict['xlim']['max_factor']
-    ax.set_xlim([xmin, xmax])
+    if np.isfinite(xmin) and np.isfinite(xmax):
+        ax.set_xlim([xmin, xmax])
     # Set y limits
     ymin = plot_dict['ylim']['min'] * plot_dict['ylim']['min_factor']
     ymax = plot_dict['ylim']['max'] * plot_dict['ylim']['max_factor']
-    ax.set_ylim([ymin, ymax])
+    if np.isfinite(ymin) and np.isfinite(ymax):
+        ax.set_ylim([ymin, ymax])
     # Set minor ticks on
     ax.minorticks_on()
     # Set ticks position
