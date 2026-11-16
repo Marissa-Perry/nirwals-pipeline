@@ -350,7 +350,7 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     good_px = gpm != 0
     weight = 1.0 / V
 
-    # if few good pixels, set with very high variance
+    # if too few good pixels, set entire column with very high variance
     frac_use = np.sum(np.where(good_px, P, 0.0), axis=0)
     weight[:, frac_use < min_frac_use] = 1e-30
 
@@ -518,9 +518,9 @@ def plot_flat_fielding(work, id, fibre_type, flt_2D, aperture_weight, flux, vari
         response = np.ones_like(flt_col_sums)
         response[valid] = flt_col_sums[valid] / flt_norm
 
-        axT.step(cols, response, where='mid', lw=0.5, color='black', label='median normalized extracted flat')
-        axT.axhline(1, color='red', alpha=0.9, lw=1.0, ls='dashed')
-        axT.set_ylabel('flat response', fontsize=12, labelpad=12)
+        axT.step(cols, response, where='mid', lw=0.5, color='black', label='extracted flat')
+        # axT.axhline(1, color='red', alpha=0.9, lw=1.0, ls='dashed')
+        axT.set_ylabel('median-norm flat', fontsize=12, labelpad=12)
         axT.set_ylim(0.5, 1.5)
     else:
         axT.step(cols, flt_col_sums, where='mid', lw=0.5, color='black', label='extracted flat')

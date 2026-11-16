@@ -1757,7 +1757,7 @@ def continuum_fit_mask_diagnostic_plot(work, xarr, mask):
     '''
     plt.figure(1, figsize=(16, 9), tight_layout=True)
     ext = (xarr.min(), xarr.max(), 0, mask.shape[0])
-    plt.imshow(mask, extent=ext, origin='lower', aspect='auto', cmap='plasma')
+    plt.imshow(mask, extent=ext, origin='lower', aspect='auto', cmap='gray', vmin=0, vmax=1)
 
     plt.xlabel('wavelength [A]', fontsize=12, labelpad=15)
     plt.ylabel('fiber #', fontsize=12, labelpad=15)
@@ -2416,7 +2416,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     # Output directory / filename stub (same pattern as the other plots)
     stub = os.path.join(get_plot_dir(work, 'sky_subtraction'), work['file'])
  
-    pastel_hex = ['#bd5e68', '#ffffba']
+    pastel_hex = ['#a1434d', '#ffffba']
     custom_pastel = LinearSegmentedColormap.from_list('custom_pastel', pastel_hex)
 
     cmap_nan = custom_pastel.copy()
@@ -3689,6 +3689,9 @@ def set_legend(ax, plot_dict):
     # Re-order display sequence
     handles, labels = ([handles[i] for i in legend_order],
                        [labels[i] for i in legend_order])
+
+    # nothing labeled
+    if not handles: return
 
     # Set legend
     ax.legend(handles, labels, **plot_dict['legend'])

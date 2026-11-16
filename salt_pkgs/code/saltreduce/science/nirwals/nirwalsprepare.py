@@ -1355,6 +1355,9 @@ def set_legend(ax, **plot_dict):
         hands, labs = ([hands[i] for i in plot_dict['legend_order']],
                        [labs[i] for i in plot_dict['legend_order']])
 
+    # nothing labeled
+    if not hands: return
+
     # Set legend
     ax.legend(hands, labs, **plot_dict['legend'])
 
