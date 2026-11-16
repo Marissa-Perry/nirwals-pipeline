@@ -74,8 +74,6 @@ SCI = 'SCI'
 ERR = 'ERR'
 # Bad pixel map fits extension
 BPM = 'BPM'
-# Continuum Fit fits extension
-FIT = 'FIT'
 # Good pixel count fits extension
 GPCNT = 'GPCNT'
 # Spectral resolution fits extension
@@ -622,20 +620,14 @@ def extract_fibres_from_image(hdu, traces, work, log):
     # Initialise flat field / continuum fit image as None
     flt = None
     # Check if flat exposure is needed for extraction
-    need_flat = (flat_type in ['flat', 'fit']) or (method == 'optimal')
+    need_flat = (flat_type == 'flat') or (method == 'optimal')
     if need_flat and (work['flat']['reference'] is not None):
 
         # Open flat field image file
         with fits.open(work['flat']['reference'], mode='readonly') as fltlist:
-
-            # Set flat field and continuum fit images as needed
-            if flat_type == 'fit':
-                # Set flat field continuum fit image
-                flt = fltlist[FIT].data.copy()
-            else:
-                # Set flat field image
-                flt = fltlist[SCI].data.copy()
-        # Set flat field or flat field continuum fit with gpm applied
+            # Set flat field image
+            flt = fltlist[SCI].data.copy()
+        # Set flat field with gpm applied
         flt *= gpm
 
     # initialise dark-rate image
@@ -2180,7 +2172,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image_scaled)
 
     # Diagnostic plots of the skyline and sky-continuum correction terms and their effect on the subtraction
-    skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask, gpcnt_image)
+    skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask)
     skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask, obj_bundle_mask=obj_bundle_mask)
     if scale_sky_cont:
         sky_cf_obj_mean_scaled = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
@@ -2391,7 +2383,7 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, science_spectral_su
     return
 
 # ---------------------------------------------------------------------------- #
-def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask, gpcnt_image):
+def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask):
 # ---------------------------------------------------------------------------- #
     '''
     Diagnostic plots for the residual-minimising skyline scaling.
@@ -2409,7 +2401,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
       3. {file}_skyline_subtraction.png
          The applied combined scale (scale_fiber x scale_wave)
     '''
-    from matplotlib.colors import LinearSegmentedColormap, ListedColormap
+    from matplotlib.colors import LinearSegmentedColormap
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     # Image dimensions and pixel-index axes
@@ -2497,10 +2489,7 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     both = np.concatenate([sci_image_unscaled_sub.ravel(), sci_image_scaled_sub.ravel()])
     r0, r1 = np.nanpercentile(both, [1, 90])
  
-    bad_pixel_mask = (gpcnt_image == 0).astype(int)
-    bpm_cmap = ListedColormap(['black', 'white'])
-
-    fig, axs = plt.subplots(5, 1, figsize=(12, 12), sharex=True)
+    fig, axs = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
 
     im0 = axs[0].imshow(sky_cs_image, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=f0, vmax=f1, cmap=custom_pastel)
     # axs[0].set_ylabel('fiber #', fontsize=11, labelpad=10)
@@ -2520,12 +2509,8 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
     im3 = axs[3].imshow(sci_image_scaled_sub, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=r0, vmax=r1, cmap=custom_pastel)
     # axs[3].set_ylabel('fiber #', fontsize=11, labelpad=10)
     axs[3].set_title(r'(D)  science $-$ scaled sky', fontsize=16, pad=5)
+    axs[3].set_xlabel('spectral channel', fontsize=14, labelpad=12)
     colorbar_axis(axs[3], im3, label='counts / s')
-
-    axs[4].imshow(bad_pixel_mask, origin='lower', aspect='auto', extent=[0, n_chan, 0, n_fibre], vmin=0, vmax=1, cmap=bpm_cmap)
-    axs[4].set_title('(E)  masked bad pixels', fontsize=16, pad=5)
-    axs[4].set_xlabel('spectral channel', fontsize=14, labelpad=12)
-    colorbar_axis(axs[4])
 
     fig.supylabel('fiber #', fontsize=14, x=0.05, y=0.5)
  
