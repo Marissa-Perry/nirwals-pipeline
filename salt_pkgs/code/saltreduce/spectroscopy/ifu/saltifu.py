@@ -324,7 +324,7 @@ def renormalize_good_pixels(arr, good_count, expected_count, valid):
     return out
 
 # ---------------------------------------------------------------------------- #
-def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark_rate, exptime, gpmarr, smooth_params):
+def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark_rate, exptime, apply_flat_response, n_sigma, n_iter, min_frac_use):
 # ---------------------------------------------------------------------------- #
     '''
     Horne 1986 optimal extraction method.
@@ -338,8 +338,7 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     # normalised to sum to 1 per column
     P = flt_ap / flt_col_sums
 
-    # variance of the rate (sci, dark_rate are counts/s): source/dark shot noise + read noise, both converted
-    # from electrons on the total exposure down to (counts/s)^2 by dividing through gain*exptime
+    # variance: source/dark shot noise + read noise
     V = (np.abs(sci) + dark_rate) / (gain * exptime) + read_noise**2 / (gain * exptime)**2
     # avoid division by zero
     V[V <= 0] = 1.0
@@ -348,54 +347,74 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     # down-weight the science data the same way as the flat
     sci_ap = sci * aperture_weight
 
-    # Horne 1986 Eq. 8
-    num = np.sum(P * sci_ap / V, axis=0)
-    den = np.sum(P**2 / V, axis=0)
-    # avoid divide by zero
-    good = den > 0
-    F = np.zeros_like(den, dtype=np.float32)
-    F[good] = num[good] / den[good]  # [counts/s]
+    good_px = gpm != 0
+    weight = 1.0 / V
 
-    # Horne 1986 Eq. 9: variance of the weighted estimator, [counts/s]^2
-    var = np.full_like(den, np.inf, dtype=np.float32)
-    var[good] = 1.0 / den[good]
+    # if very few good pixels, set with zero-weight
+    frac_use = np.sum(np.where(good_px, P, 0.0), axis=0)
+    weight[:, frac_use < min_frac_use] = 0.0
 
-    # same sum as P's normalisation
-    flt_col_sums = flt_ap.sum(axis=0)
-    # which columns have a real (finite) flat value
-    non_nan = np.isfinite(flt_col_sums)
-    valid = non_nan * (gpmarr != 0)
-    # renormalize flat by number of good pixels per wavelength bin
-    flt_col_sums = renormalize_good_pixels(flt_col_sums, gpmarr, gpmarr[non_nan].mean(), valid)
+    # run multiple extractions with iterative rejection
+    for i in range(n_iter + 1):
+        # Horne 1986 Eq. 8
+        num = np.sum(P * sci_ap * weight, axis=0)
+        den = np.sum(P**2 * weight, axis=0)
+        # avoid divide by zero
+        good = den > 0
+        F = np.zeros_like(den, dtype=np.float32)
+        F[good] = num[good] / den[good]  # [counts/s]
 
-    cols = np.arange(flt_col_sums.shape[0])
-    finite_positive = flt_col_sums[flt_col_sums > 0]
-    # exclude non-physical renormalized values
-    valid_vals = 20 * np.median(finite_positive) if finite_positive.size else np.inf
-    fit_valid = (flt_col_sums > 0) & (flt_col_sums < valid_vals)
-    try:
-        # fit a smooth model to the lamp shape of the raw master flat
-        cf = Fit1D(cols[fit_valid], flt_col_sums[fit_valid], **smooth_params)
-        smooth_fit = np.clip(cf(cols), 0.0, None)
-    except SALTError:
-        smooth_fit = flt_col_sums.copy()
-    response = np.ones_like(flt_col_sums)
-    nz = (smooth_fit > 0) & fit_valid
-    # then divide it out
-    response[nz] = flt_col_sums[nz] / smooth_fit[nz]
+        # Horne 1986 Eq. 9: variance of the weighted estimator, [counts/s]^2
+        var = np.full_like(den, np.inf, dtype=np.float32)
+        var[good] = 1.0 / den[good]
 
-    # Set combined finite flat and non zero response mask
-    mask = non_nan * (response != 0)
-    # leftover pixel-to-pixel response used to flat-field the extracted flux and variance
-    F[mask] /= response[mask]
-    var[mask] /= response[mask]**2
+        if i == n_iter:
+            break
+
+        # --- rejection: ---
+        # model pixels from this iteration's profile
+        model = P * F[None, :]
+        # compute residuals
+        with np.errstate(invalid='ignore', divide='ignore'):
+            chi = (sci_ap - model) * np.sqrt(weight)
+        outlier = np.abs(chi) > n_sigma
+        # if no outliers, stop iterations
+        if not outlier.any():
+            break
+        # test the fragility of the profile if we reject those outliers
+        candidate_good = good_px & ~outlier
+        candidate_frac_use = np.sum(np.where(candidate_good, P, 0.0), axis=0)
+        # unflag any outliers who's rejection would leave a column with too little coverage
+        outlier &= (candidate_frac_use >= min_frac_use)[None, :]
+        # if all outliers were unflagged, stop iterations
+        if not outlier.any():
+            break
+        # give outliers very high variance in next iteration and remove from good pixels
+        weight[outlier] = 1e-30
+        good_px &= ~outlier
+        # -------------------
+
+    if apply_flat_response:
+        # same sum as P's normalisation (these cancel out in flat fielding)
+        flt_col_sums = flt_ap.sum(axis=0)
+        finite_positive = flt_col_sums[flt_col_sums > 0]
+        # exclude non-physical values
+        valid_vals = 20 * np.median(finite_positive) if finite_positive.size else np.inf
+        valid = (flt_col_sums > 0) & (flt_col_sums < valid_vals)
+        flt_norm = np.nanmedian(flt_col_sums[valid]) if valid.any() else 1.0
+        response = np.ones_like(flt_col_sums)
+        response[valid] = flt_col_sums[valid] / flt_norm
+        good_resp = response != 0
+        # flat-field the extracted flux and variance
+        F[good_resp] /= response[good_resp]
+        var[good_resp] /= response[good_resp]**2
 
     F[~np.isfinite(F)] = 0.0
     var[~np.isfinite(var)] = np.inf
     return F, var
 
 # ---------------------------------------------------------------------------- #
-def extract_fibre_boxcar(sciarr, gpmarr, fltarr, smooth_params):
+def extract_fibre_boxcar(sciarr, gpmarr, fltarr, min_frac_use):
 # ---------------------------------------------------------------------------- #
     '''
     Boxcar extraction with flat-fielding and good-pixel renormalization.
@@ -406,34 +425,24 @@ def extract_fibre_boxcar(sciarr, gpmarr, fltarr, smooth_params):
     # flat-field extracted spectra
     # Check flat field image array
     if fltarr is not None:
-        valid = non_nan * (gpmarr != 0)
-        # Renormalize flat by number of good pixels per wavelength bin
-        fltarr = renormalize_good_pixels(fltarr, gpmarr, gpmarr[non_nan].mean(), valid)
-
-        cols = np.arange(fltarr.shape[0])
         finite_positive = fltarr[fltarr > 0]
-        # exclude non-physical renormalized values 
+        # exclude non-physical values
         valid_vals = 20 * np.median(finite_positive) if finite_positive.size else np.inf
-        fit_valid = (fltarr > 0) & (fltarr < valid_vals)
-        try:
-            # fit a smooth model to the lamp shape of the raw master flat
-            cf = Fit1D(cols[fit_valid], fltarr[fit_valid], **smooth_params)
-            smooth_fit = np.clip(cf(cols), 0.0, None)
-        except SALTError:
-            smooth_fit = fltarr.copy()
+        valid = (fltarr > 0) & (fltarr < valid_vals)
+        flt_norm = np.nanmedian(fltarr[valid]) if valid.any() else 1.0
         response = np.ones_like(fltarr)
-        nz = (smooth_fit > 0) & fit_valid
-        # then divide it out
-        response[nz] = fltarr[nz] / smooth_fit[nz]
-
-        # Set combined non NaN science and non zero response mask
-        mask = (non_nan) * (response != 0)
-        # leftover pixel-to-pixel response used to flat-field extracted spectra
+        response[valid] = fltarr[valid] / flt_norm
+        mask = non_nan & (response != 0)
+        # flat-field extracted spectra
         sciarr[mask] /= response[mask]
 
     # Renormalize by number of good pixels per wavelength bin
     valid = non_nan * (gpmarr != 0)
     sciarr = renormalize_good_pixels(sciarr, gpmarr, gpmarr[non_nan].mean(), valid)
+
+    # too few good pixels to perform renormalization
+    low_coverage = gpmarr < min_frac_use * gpmarr[non_nan].mean()
+    sciarr[low_coverage] = 0.0
 
     return sciarr
 
@@ -446,112 +455,6 @@ def get_plot_dir(work, category):
     plot_dir = os.path.join(work['output']['dir'], 'plots', work['file'], category)
     os.makedirs(plot_dir, exist_ok=True)
     return plot_dir
-
-# ---------------------------------------------------------------------------- #
-def plot_extraction_comparison(method, id, cols_to_debug, sci_opt, gpm, flt, aperture_weight, sciarr, gpmarr, fltarr, gain, read_noise, dark_rate, exptime, smooth_params, work):
-# ---------------------------------------------------------------------------- #
-    '''
-    Top: extracted spectrum using both optimal and boxcar methods. 
-    Bottom: some diagnostic columns (plotting: raw-flat / optimal / boxcar profile, aperture weight, good-pixel mask).
-    '''
-    mark_colors = ['green', 'orange', 'purple']
-
-    if len(cols_to_debug) == 0:
-        return
-
-    rows = np.arange(flt.shape[0])
-    cols = np.arange(flt.shape[1])
-
-    def normalize(a):
-        s = a.sum(axis=0)
-        s = np.where(s == 0, 1.0, s)
-        return a / s
-
-    # extraction weighting from optimal and boxcar
-    P_raw = normalize(flt)                        # profile as it sits in the flat data
-    P_opt = normalize(flt * aperture_weight)      # optimal profile P
-    W_box = normalize(aperture_weight * gpm)      # boxcar effective weight (top-hat over good rows)
-
-    # extracted data from optimal and boxcar for fiber spectrum
-    F_opt, var_opt = extract_fibre_optimal(sci_opt.copy(), gpm.copy(), flt.copy(), gain, read_noise, aperture_weight, dark_rate, exptime, gpmarr, smooth_params)
-    F_box = extract_fibre_boxcar(sciarr.copy(), gpmarr, fltarr.copy(), smooth_params)
-    gpm_per_col = gpmarr
-
-    fig = plt.figure(figsize=(4.6 * len(cols_to_debug), 10))
-
-    outer = fig.add_gridspec(2, 1, height_ratios=[2, 3], hspace=0.30)
-    # ===================== TOP: full-width spectrum + gpm count =====================
-    top = outer[0].subgridspec(2, 1, height_ratios=[3, 1], hspace=0.0)
-    axS = fig.add_subplot(top[0])
-    axC = fig.add_subplot(top[1], sharex=axS)
-
-    axS.set_title(f'extracted spectrum for fibre #{id} (method set to {method})', fontsize=15, pad=12)
-    sigma_opt = np.sqrt(np.where(np.isfinite(var_opt) & (var_opt > 0), var_opt, np.nan))
-    axS.fill_between(cols, F_opt - sigma_opt, F_opt + sigma_opt, step='mid', color='blue', alpha=0.15, linewidth=0.6, zorder=0)
-    axS.step(cols, F_box, where='mid', lw=0.8, color='red',  alpha=0.6, label='boxcar')
-    axS.step(cols, F_opt, where='mid', lw=0.8, color='blue', alpha=0.6, label='optimal')
-    axS.set_ylabel('[counts / s]', fontsize=12, labelpad=12)
-    axS.legend(fontsize=12, loc='upper right')
-    m = np.isfinite(F_opt) & np.isfinite(F_box)
-    if m.any():
-        hi = np.nanpercentile(np.concatenate([F_opt[m], F_box[m]]), 99)
-        axS.set_ylim(-8, max(hi, 1))
-    plt.setp(axS.get_xticklabels(), visible=False)
-
-    axC.fill_between(cols, 0, gpm_per_col, step='mid', color='grey', alpha=0.8)
-    axC.set_ylim(0, gpm_per_col.max() + 1)
-    axC.set_ylabel('# good pix', fontsize=10, labelpad=12)
-    axC.set_xlabel('wavelength column', fontsize=12, labelpad=10)
-
-    for j, col in enumerate(cols_to_debug):
-        c = mark_colors[j % len(mark_colors)]
-        axS.axvline(col, color=c, ls='dashed', lw=1.8, zorder=5)
-        axC.axvline(col, color=c, ls='dashed', lw=1.8, zorder=5)
-
-    # ===================== BOTTOM: one stack per debug column =====================
-    bottom = outer[1].subgridspec(1, len(cols_to_debug), wspace=0.05)
-    for j, col in enumerate(cols_to_debug):
-
-        good = gpm[:,col] == 1
-        F_ap = sci_opt[:,col] * aperture_weight[:,col]  * good  # aperture-weighted data with bad rows masked out
-        F_ap_normalized = F_ap / F_ap.sum()
-
-        c = mark_colors[j % len(mark_colors)]
-        cell = bottom[j].subgridspec(3, 1, height_ratios=[4, 1, 1], hspace=0.0)
-        axP = fig.add_subplot(cell[0])
-        axA = fig.add_subplot(cell[1], sharex=axP)
-        axM = fig.add_subplot(cell[2], sharex=axP)
-
-        ratio = F_opt[col]/F_box[col]
-        axP.set_title(f'col #{col},  opt/boxcar={ratio:.1f}', color=c, fontsize=12, pad=8)
-        axP.step(rows, F_ap_normalized, where='mid', lw=1.5, color='black', label='data', zorder=5)
-        axP.step(rows, P_raw[:, col], where='mid', lw=1.5, color='lightblue', label='raw flat')
-        axP.step(rows, P_opt[:, col], where='mid', lw=1.5, color='blue', alpha=0.8, label='optimal profile')
-        axP.step(rows, W_box[:, col], where='mid', lw=1.5, color='red', alpha=0.8, label='boxcar profile')
-        axP.set_ylim(-0.05, max(P_raw[:, col].max(), P_opt[:, col].max(), W_box[:, col].max(), F_ap_normalized.max()) * 1.1)
-        plt.setp(axP.get_xticklabels(), visible=False)
-
-        axA.fill_between(rows, 0, aperture_weight[:, col], step='mid', color='grey', alpha=0.8)
-        axA.set_ylim(-0.09, 1.15)
-        plt.setp(axA.get_xticklabels(), visible=False)
-
-        axM.fill_between(rows, 0, gpm[:, col], step='mid', color='grey', alpha=0.8)
-        axM.set_ylim(-0.09, 1.15)
-        axM.set_xlabel('fibre aperture row', fontsize=11, labelpad=8)
-
-        if j == 0: 
-            axP.set_ylabel('norm values', fontsize=11, labelpad=12)
-            axA.set_ylabel('weight', fontsize=9, labelpad=15)
-            axM.set_ylabel('# good pixels', fontsize=9, labelpad=15)
-            axP.legend(fontsize=10, loc='upper left')
-        else:
-            for ax in (axP, axA, axM):
-                plt.setp(ax.get_yticklabels(), visible=False)
-
-    plot_dir = get_plot_dir(work, 'extracted_spectra')
-    out_file = os.path.join(plot_dir, '{0}_extraction_debug_fibre{1}.png'.format(work['file'], id))
-    plt.savefig(out_file, dpi=180, format='png', bbox_inches='tight')
-    plt.close(fig)
 
 # ---------------------------------------------------------------------------- #
 def plot_fibre_extraction(work, id, fibre_type, spectrum, gpm_per_col, variance=None):
@@ -588,70 +491,62 @@ def plot_fibre_extraction(work, id, fibre_type, spectrum, gpm_per_col, variance=
     plt.close(fig)
 
 # ---------------------------------------------------------------------------- #
-def plot_flat_fielding(work, id, fibre_type, flt_2D, aperture_weight, flux, variance, gpm_per_col, smooth_params):
+def plot_flat_fielding(work, id, fibre_type, flt_2D, aperture_weight, flux, variance, gpm_per_col):
 # ---------------------------------------------------------------------------- #
     '''
-    Top: bad-pixel renormalized flat and its smooth fit.
-    Upper-middle: pixel-to-pixel flat response (the flat-fielding curve).
-    Lower-middle: extracted and flat-fielded flux
+    Top: median normalized extracted flat
+    Middle: extracted vs. flat fielded flux
     Bottom: good-pixel count per column
     '''
+    apply_flat_response = work['flat']['type'][work['exp_type']] == 'flat'
+
     flt_ap = flt_2D * aperture_weight
     flt_col_sums = flt_ap.sum(axis=0)
-    # which columns have a real (finite) flat value
-    non_nan = np.isfinite(flt_col_sums)
-    valid = non_nan * (gpm_per_col != 0)
-    # renormalize flat by number of good pixels per wavelength bin
-    flt_col_sums = renormalize_good_pixels(flt_col_sums, gpm_per_col, gpm_per_col[non_nan].mean(), valid)
-
     cols = np.arange(flt_col_sums.shape[0])
-    finite_positive = flt_col_sums[flt_col_sums > 0]
-    # exclude non-physical renormalized values
-    valid_vals = 20 * np.median(finite_positive) if finite_positive.size else np.inf
-    fit_valid = (flt_col_sums > 0) & (flt_col_sums < valid_vals)
-    try:
-        # fit a smooth model to the lamp shape of the raw master flat
-        cf = Fit1D(cols[fit_valid], flt_col_sums[fit_valid], **smooth_params)
-        smooth_fit = np.clip(cf(cols), 0.0, None)
-    except SALTError:
-        smooth_fit = flt_col_sums.copy()
-    response = np.ones_like(flt_col_sums)
-    nz = (smooth_fit > 0) & fit_valid
-    # then divide it out
-    response[nz] = flt_col_sums[nz] / smooth_fit[nz]
 
-    fig, (axT, axF, axR, axG) = plt.subplots(4, 1, figsize=(10, 8), sharex=True, gridspec_kw={'height_ratios': [3, 3, 3, 1], 'hspace': 0.0})
+    fig, (axT, axR, axG) = plt.subplots(3, 1, figsize=(10, 6.5), sharex=True, gridspec_kw={'height_ratios': [3, 3, 1], 'hspace': 0.0})
 
     bundle = 'sky-bundle' if fibre_type == 'sky' else 'object-bundle'
     axT.set_title(f'fiber #{id} ({bundle})', fontsize=15, pad=15)
-    axT.step(cols, flt_col_sums, where='mid', lw=0.5, color='black', label='bad-pixel renormalized flat')
-    axT.plot(cols, smooth_fit, lw=1.0, ls='dashed', color='red', alpha=0.9, label='smooth fit')
+
+    if apply_flat_response:
+        finite_positive = flt_col_sums[flt_col_sums > 0]
+        # exclude non-physical values
+        valid_vals = 20 * np.median(finite_positive) if finite_positive.size else np.inf
+        valid = (flt_col_sums > 0) & (flt_col_sums < valid_vals)
+        flt_norm = np.nanmedian(flt_col_sums[valid]) if valid.any() else 1.0
+        response = np.ones_like(flt_col_sums)
+        response[valid] = flt_col_sums[valid] / flt_norm
+
+        axT.step(cols, response, where='mid', lw=0.5, color='black', label='median normalized extracted flat')
+        axT.axhline(1, color='red', alpha=0.9, lw=1.0, ls='dashed')
+        axT.set_ylabel('flat response', fontsize=12, labelpad=12)
+        axT.set_ylim(0.5, 1.5)
+    else:
+        axT.step(cols, flt_col_sums, where='mid', lw=0.5, color='black', label='extracted flat')
+        axT.set_ylabel('flat [counts / s]', fontsize=12, labelpad=12)
+        ymin, ymax = axT.get_ylim()
+        axT.set_ylim(ymin, ymax + 0.2 * (ymax - ymin))
+
     for i, amp_edge in enumerate(AMP_BOUNDARIES):
         axT.axvline(amp_edge, color='grey', alpha=0.4, ls='dotted', lw=0.8, label='amp boundary' if i == 0 else None)
-    axT.set_ylabel('flat [counts / s]', fontsize=12, labelpad=12)
-    ymin, ymax = axT.get_ylim()
-    axT.set_ylim(ymin, ymax + 0.2 * (ymax - ymin))
     axT.legend(fontsize=10, loc='upper right')
     plt.setp(axT.get_xticklabels(), visible=False)
 
-    axF.step(cols, response, where='mid', lw=0.5, color='black', label='pixel-to-pixel flat response')
-    for i, amp_edge in enumerate(AMP_BOUNDARIES):
-        axF.axvline(amp_edge, color='grey', alpha=0.4, ls='dotted', lw=0.8, label='amp boundary' if i == 0 else None)
-    axF.axhline(1, color='red', alpha=0.9, lw=1.0, ls='dashed')
-    axF.set_ylabel('flat response', fontsize=12, labelpad=12)
-    axF.set_ylim(0.5, 1.5)
-    axF.legend(fontsize=10, loc='upper right')
-    plt.setp(axF.get_xticklabels(), visible=False)
-
-    extracted = flux * response   # before dividing by the flat
     sigma = np.sqrt(np.where(np.isfinite(variance) & (variance > 0), variance, np.nan))
     axR.fill_between(cols, flux - sigma, flux + sigma, step='mid', color='grey', alpha=0.4)
-    axR.step(cols, extracted, where='mid', lw=0.8, color='orange', alpha=0.6, zorder=1, label='extracted')
-    axR.step(cols, flux, where='mid', lw=0.8, color='blue', alpha=0.5, zorder=2, label='flat-fielded')
+    if apply_flat_response:
+        extracted = flux * response   # before dividing by the flat
+        axR.step(cols, extracted, where='mid', lw=0.8, color='orange', alpha=0.6, zorder=1, label='extracted')
+        axR.step(cols, flux, where='mid', lw=0.8, color='blue', alpha=0.5, zorder=2, label='flat-fielded')
+        ylim_ref = extracted
+    else:
+        axR.step(cols, flux, where='mid', lw=0.8, color='blue', alpha=0.5, zorder=2, label='extracted')
+        ylim_ref = flux
     axR.set_ylabel('science [counts / s]', fontsize=12, labelpad=12)
-    finite_extracted = extracted[np.isfinite(extracted)]
-    if finite_extracted.size:
-        axR.set_ylim(-2, np.nanpercentile(finite_extracted, 99.9))
+    finite_ref = ylim_ref[np.isfinite(ylim_ref)]
+    if finite_ref.size:
+        axR.set_ylim(-2, np.nanpercentile(finite_ref, 99.9))
     axR.legend(fontsize=10, loc='upper right')
     plt.setp(axR.get_xticklabels(), visible=False)
 
@@ -674,29 +569,17 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
 
     work['extract_method']:
       'optimal' : Horne 1986 inverse-variance weighted extraction (default).
-                  Uses per-fibre native-resolution science/gpm/flat regions.
       'boxcar'  : sum within aperture with good-pixel renormalization.
-                  Uses per-fibre collapsed 1D arrays.
 
-    sci : 2D science image, gpm applied (boxcar, bad pixels contribute mean flux value to sum)
-    sci_unmasked : 2D science image, gpm NOT applied (optimal, bad-pixels are given high noise)
-    gpm : 2D good-pixel image (1=good, 0=bad)
-    flt  2D flat / continuum-fit image (gpm applied), or None
-    dark_rate : 2D master-dark rate image (counts/s, clipped >= 0), for the optimal method's
-                variance model, or None (unused by boxcar)
-    traces : fibre traces dictionary
-    gain : [e-]
-    read_noise : [e-]
-    exptime : [s], for the optimal method's variance model
-
-    Returns (fibres, good_pixels, variances) -- variances is inf (boxcar, no noise model) or the
-    Horne formal extraction variance (optimal), both keyed the same as fibres/good_pixels.
+    Returns (fibres, good_pixels, variances)
     '''
     # Set extraction method (default optimal)
     method = work.get('extract_method', 'optimal')
     flat_type = work['flat']['type'][work['exp_type']]
-    apply_flat_boxcar = flat_type in ['flat', 'fit']
-    smooth_params = work['smooth']['flat_throughput']
+    apply_flat_response = flat_type == 'flat'
+    n_sigma = work['extract']['n_sigma']
+    n_iter = work['extract']['n_iter']
+    min_frac_use = work['extract']['min_frac_use']
 
     # optimal extraction requires a flat field for the spatial profile
     if method == 'optimal' and flt is None:
@@ -705,7 +588,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
         if work['exp_type'] == 'arc':
             method = 'boxcar'
         else:
-            raise SALTError("Optimal extraction requires a flat field (flat.type must be 'flat' or 'fit').")
+            raise SALTError("Optimal extraction requires a flat field (flat.type must be 'flat').")
 
 
     if method not in ('optimal', 'boxcar'):
@@ -733,12 +616,12 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
             sciarr = set_fibre_array(sci, r_min, r_max, valid, work)
 
             fltarr = None
-            if apply_flat_boxcar and flt is not None:
+            if apply_flat_response and flt is not None:
                 # Extract fibre flat field array
                 fltarr = set_fibre_array(flt, r_min, r_max, valid, work)
 
-            # Add fibre flux to extracted fibres dictionary -- boxcar has no noise model
-            fibres[id] = extract_fibre_boxcar(sciarr, gpmarr, fltarr, smooth_params)
+            # Add fibre flux to extracted fibres dictionary
+            fibres[id] = extract_fibre_boxcar(sciarr, gpmarr, fltarr, min_frac_use)
             variances[id] = np.full(fibres[id].shape, np.inf, dtype=np.float32)
 
         # =========================== OPTIMAL ==========================
@@ -756,7 +639,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
             dark_2D = dark_rate[r_min:r_max, :].copy()
 
             # Add fibre flux to extracted fibres dictionary
-            fibres[id], variances[id] = extract_fibre_optimal(sci_2D, gpm_2D, flt_2D, gain, read_noise, aperture_weight, dark_2D, exptime, gpmarr, smooth_params)
+            fibres[id], variances[id] = extract_fibre_optimal(sci_2D, gpm_2D, flt_2D, gain, read_noise, aperture_weight, dark_2D, exptime, apply_flat_response, n_sigma, n_iter, min_frac_use)
 
         # Store good-pixel count for this fibre
         good_pixels[id] = gpmarr
@@ -782,7 +665,7 @@ def extract_fibres(sci, sci_unmasked, gpm, flt, dark_rate, traces, gain, read_no
                 n_cols = valid.shape[-1]
                 aperture_weight = valid.reshape(n_rows, n_sub_rows, n_cols).mean(axis=1)
                 flt_2D = flt[r_min:r_max, :]
-                plot_flat_fielding(work, id, traces[id].get('type', 'object'), flt_2D, aperture_weight, fibres[id], variances[id], good_pixels[id], smooth_params)
+                plot_flat_fielding(work, id, traces[id].get('type', 'object'), flt_2D, aperture_weight, fibres[id], variances[id], good_pixels[id])
 
     return fibres, good_pixels, variances
 

@@ -156,8 +156,7 @@
     "ar_ang_adjust": {"ar_ang": [59.0, 67.0, 74.0, 82.0, 90.0, 100.00], "adjust": [0.000000, 0.000150, 0.000250, 0.000350, 0.000475, 0.000625]},
 
     "smooth": {
-        "arc": {"window_length": 5, "polyorder": 3},
-        "flat_throughput": {"function": "legendre", "order": 10, "low_reject": 2, "high_reject": 2, "niter": 5}
+        "arc": {"window_length": 5, "polyorder": 3}
     },
     "specres":{
         "height_sigma": 5,
@@ -176,14 +175,13 @@
 
     "flat": {
         "file": "",
-        "type": {"arc": "none", "sky": "none", "science": "none"},
+        "type": {"arc": "flat", "sky": "flat", "science": "flat"},
         "notes": [
-            "a. type = 'none' | 'flat' | 'fit';",
+            "a. type = 'none' | 'flat';",
             "b. none: no flat correction applied;",
             "c. flat: divide by combined flat image;",
-            "d. fit: divide by combined flat fit image;",
-            "e. blank will be treated as 'none';",
-            "f. type for 'sky' and 'science' MUST be the same"
+            "d. blank will be treated as 'none';",
+            "e. type for 'sky' and 'science' MUST be the same"
         ]
     },
 
@@ -275,13 +273,18 @@
             "b. optimal: Horne 1986 inverse-variance weighted extraction using fiber profiles from flat exposure;",
             "c. boxcar: sum within aperture with good-pixel renormalization;",
             "d. read_noise_electrons: per-pixel read noise from up-the-ramp sampling, keyed by nearest EXPTIME",
-            "e. gain_default: gain measured during image reduction"
+            "e. gain_default: gain measured during image reduction",
+            "f. n_sigma/n_iter: iterative residual sigma-clipping during optimal extraction",
+            "g. min_frac_use: minimum fraction of a fiber's profile that must be backed by good pixels per column -- columns below this are skipped (F=0), and rejection cannot push a column below it"
         ],
         "read_noise_electrons": {
             "30": 15.5, "60": 12.8, "90": 11.6, "120": 11.2, "167": 10.7, "600": 12.6
         },
         "read_noise_default": 12.6,
-        "gain_default": 2.0
+        "gain_default": 2.0,
+        "n_sigma": 5,
+        "n_iter": 3,
+        "min_frac_use": 0.5
     },
 
     "w_mod": {"min": 0.0, "max": 0.0, "tol": 15.0}, "w_rms_tol": {"min": 0.0001, "max": 0.75}, "z_rms_tol": {"min": 0.0001, "max": 0.75},
@@ -378,11 +381,11 @@
             "xlim": {"min": 0, "max": 0, "min_factor": 1.0, "max_factor": 1.0},
             "ylim": {"min": 0, "max": 0, "min_factor": -0.5, "max_factor": 3},
             "spectrum": {"label": "Spectrum", "linestyle": "-", "linewidth": 1.0, "color": "yellow"},
-            "clip": {"label": "Spectrum - clipped", "linestyle": "-", "linewidth": 1.0, "color": "orange"},
-            "fit": {"label": "Continuum fit", "linestyle": "--", "linewidth": 2.5, "color": "blue"},
+            "clip": {"label": "Spectrum - clipped", "linestyle": "-", "linewidth": 1.0, "color": "#86aa8d"},
+            "fit": {"label": "Continuum fit", "linestyle": "--", "linewidth": 2.5, "color": "#9a8c98"},
             "subtract": {"label": "Continuum subtracted", "linestyle": "-", "linewidth": 1.0, "color": "grey"},
             "zero_line": {"linestyle": "--", "linewidth": 0.5, "color": "grey"},
-            "legend_order": [1, 2, 3, 4, 0],
+            "legend_order": [1, 2, 3, 0],
             "legend": {"loc": "upper right", "fontsize": 15},
             "save": 1,
             "show": 0
