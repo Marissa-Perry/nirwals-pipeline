@@ -350,9 +350,9 @@ def extract_fibre_optimal(sci, gpm, flt, gain, read_noise, aperture_weight, dark
     good_px = gpm != 0
     weight = 1.0 / V
 
-    # if very few good pixels, set with zero-weight
+    # if few good pixels, set with very high variance
     frac_use = np.sum(np.where(good_px, P, 0.0), axis=0)
-    weight[:, frac_use < min_frac_use] = 0.0
+    weight[:, frac_use < min_frac_use] = 1e-30
 
     # run multiple extractions with iterative rejection
     for i in range(n_iter + 1):
