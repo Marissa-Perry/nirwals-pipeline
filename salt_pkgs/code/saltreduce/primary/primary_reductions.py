@@ -291,7 +291,7 @@ def set_dark_file(exp_time, prd_dir, obs_date, subtract=True, tol=5.0):
     return best
 
 
-def _dark_subtract(in_path, out_path, obs_date, pdir, inplace):
+def dark_subtract(in_path, out_path, obs_date, pdir, inplace):
     """
     Subtract the EXPTIME-matched master dark from raw SCI.
     Returns 1 if a subtraction was written, 0 if skipped.
@@ -342,7 +342,7 @@ def dark_subtract_all(obs_date, prefix):
             continue  # darks aren't subtracted; flats are handled via the master flat
         prddir = product_dir(obs_date)
         out = os.path.join(prddir, prefix + os.path.basename(f))
-        ok = _dark_subtract(f, out, obs_date, prddir, inplace=False)
+        ok = dark_subtract(f, out, obs_date, prddir, inplace=False)
         n_done += ok
         n_skip += (1 - ok)
 
