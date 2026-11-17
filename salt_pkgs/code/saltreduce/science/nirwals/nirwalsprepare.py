@@ -864,6 +864,15 @@ def prepare_fibres_config_entries(config_p, flat_files, log):
             work['config'] = set_exposure_config_id(hdulist, work)
             # Set this flat's own FIBERMAP data in work dictionary
             work['fibre_map'] = hdulist['FIBERMAP'].data.copy() if 'FIBERMAP' in hdulist else None
+            # Set this flat's own BPM data
+            bpm = hdulist['BPM'].data if 'BPM' in hdulist else None
+            # Check if bad pixel masking is enabled and a BPM is available
+            if bpm is not None and work['flat']['mask_bpm']['apply']:
+                # Add message to log
+                msg = ' - mask bad pixels before fibre tracing'
+                log.message(msg, with_header=False)
+                # Exclude bad pixels from fibre tracing
+                image = np.where(bpm == 1, np.nan, image)
 
         # Set latest db traces dictionary
         db_traces = config_f['db']['traces']

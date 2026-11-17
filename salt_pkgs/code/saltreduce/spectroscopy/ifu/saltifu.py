@@ -144,8 +144,8 @@ def find_fibre_features(image, axis, work):
     cols = image.shape[1]
 
     # Compress data profile (along dispersion axis):
-    # - call method dynamically as attribute of numpy (np)
-    profile = getattr(np, work['profile']['compress'])(image, axis=axis)
+    # - call nan-aware method dynamically as attribute of numpy (np)
+    profile = getattr(np, 'nan' + work['profile']['compress'])(image, axis=axis)
     # - check if method is 'sum'
     if work['profile']['compress'] == 'sum':
         # - average profile with nr of columns

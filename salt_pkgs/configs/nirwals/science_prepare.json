@@ -62,7 +62,8 @@
             "fit": {"function": "legendre", "order": 21, "low_reject": 2, "high_reject": 2, "niter": 10},
             "cols": [4, 2045]
         },
-        "find_peaks": {"width": 5, "wlen": 10, "rel_height": 0.9}
+        "find_peaks": {"width": 5, "wlen": 10, "rel_height": 0.9},
+        "mask_bpm": {"apply": true}
     },
 
     "config_key": {
