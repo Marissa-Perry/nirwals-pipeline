@@ -6,6 +6,7 @@ SALT IFU utilities:
 # ---------------------------------------------------------------------------- #
 
 # Standard library imports
+import copy
 from math import ceil
 
 # numpy import
@@ -204,9 +205,10 @@ def set_fibre_traces(fibres_config, work, log):
         msg = ' - initialise new fibre traces dictionary'
         log.message(msg, with_header=False)
         # Initialise new fibre traces dictionary
+        # deep copy: each config needs its own independent fibres dict
         traces = {
             'reference': work['flat']['reference'],
-            'fibres': work['fibres']
+            'fibres': copy.deepcopy(work['fibres'])
         }
 
     return traces
@@ -310,6 +312,111 @@ def trace_fibres(traces, fibres, windows, work, log):
         traces['fibres'][id]['upper_trace'] = upper_fit.coef.tolist()
 
     return True, traces
+
+# ---------------------------------------------------------------------------- #
+def realign_fibre_identities(traces, work, log):
+# ---------------------------------------------------------------------------- #
+
+    # Set this flat's own FIBERMAP data
+    fibre_map = work.get('fibre_map')
+    if fibre_map is None:
+        # Add message to log
+        msg = ' - no FIBERMAP extension in flat: skipping fibre identity realignment'
+        log.message(msg, with_header=False)
+        return
+
+    # Set expected row offset and match tolerance
+    offset = work['trace'].get('expected_row_offset')
+    tolerance = work['trace'].get('row_offset_tolerance')
+    if offset is None or tolerance is None:
+        # Add message to log
+        msg = ' - trace.expected_row_offset/row_offset_tolerance not configured: skipping fibre identity realignment'
+        log.message(msg, with_header=False)
+        return
+
+    # Add message to log
+    msg = ' - realign fibre identities'
+    log.message(msg, with_header=False)
+
+    # Set fibre id list
+    ids = list(traces['fibres'].keys())
+    n = len(ids)
+
+    # Set static identity for each fibre id (snapshot before any reassignment)
+    ifu_ids = [traces['fibres'][id]['ifu_id'] for id in ids]
+    types = [traces['fibres'][id]['type'] for id in ids]
+    blocks = [traces['fibres'][id]['block'] for id in ids]
+
+    # Set detected trace centre (column 0) for each fibre id
+    detected = np.full(n, np.nan)
+    for i, id in enumerate(ids):
+        lower = traces['fibres'][id]['lower_trace']
+        upper = traces['fibres'][id]['upper_trace']
+        if lower and upper:
+            detected[i] = 0.5 * (lower[0] + upper[0])
+
+    # Set expected trace centre for each fibre id, from this flat's own FIBERMAP
+    expected = np.full(n, np.nan)
+    for i in range(n):
+        fm_type = 'object' if types[i] == 'obj' else 'sky'
+        match = fibre_map[(fibre_map['IFU_ID'] == ifu_ids[i]) & (fibre_map['TYPE'] == fm_type)]
+        if len(match):
+            expected[i] = match['ROW'][0] + offset
+
+    # Match each detected trace to the nearest, not-yet-claimed expected position
+    # assigned_to[i] = j: fibre id i is re-identified as expected slot j
+    assigned_to = np.full(n, -1, dtype=int)
+    claimed = np.zeros(n, dtype=bool)
+
+    # Pass 1: nearest match within tolerance, ids taken in slit order
+    for i in range(n):
+        if not np.isfinite(detected[i]):
+            continue
+        available = np.where(np.isfinite(expected) & ~claimed)[0]
+        if len(available) == 0:
+            continue
+        j = available[np.argmin(np.abs(expected[available] - detected[i]))]
+        if abs(expected[j] - detected[i]) <= tolerance:
+            assigned_to[i] = j
+            claimed[j] = True
+
+    # Pass 2: forced match for anything left over, no tolerance limit
+    n_forced = 0
+    for i in range(n):
+        if assigned_to[i] >= 0 or not np.isfinite(detected[i]):
+            continue
+        available = np.where(np.isfinite(expected) & ~claimed)[0]
+        if len(available) == 0:
+            continue
+        j = available[np.argmin(np.abs(expected[available] - detected[i]))]
+        assigned_to[i] = j
+        claimed[j] = True
+        n_forced += 1
+
+    # Apply matched identities
+    n_relabeled = 0
+    for i in range(n):
+        j = assigned_to[i]
+        if j < 0:
+            continue
+        if (ifu_ids[j], types[j]) != (ifu_ids[i], types[i]):
+            n_relabeled += 1
+        traces['fibres'][ids[i]]['ifu_id'] = ifu_ids[j]
+        traces['fibres'][ids[i]]['type'] = types[j]
+        traces['fibres'][ids[i]]['block'] = blocks[j]
+
+    # Set nr of unresolved fibre ids
+    n_unresolved = int(np.sum(assigned_to < 0))
+
+    # Add message to log
+    msg = '   - relabeled: {0}, forced: {1}, unresolved: {2}'.format(n_relabeled, n_forced, n_unresolved)
+    log.message(msg, with_header=False)
+    if n_unresolved:
+        # Add message to log
+        msg = '   - WARNING: {0} fibre id(s) left with unverified identity'.format(n_unresolved)
+        log.message(msg, with_header=False)
+
+    return
 
 # ---------------------------------------------------------------------------- #
 def renormalize_good_pixels(arr, good_count, expected_count, valid):

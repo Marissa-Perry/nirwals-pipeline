@@ -22,7 +22,9 @@
         "window": {"size": 256, "step": 128},
         "clip": {"sigma": 3.0, "cenfunc": "mean"},
         "point_tolerance": 1.5,
-        "min_points_pc": 50.0
+        "min_points_pc": 50.0,
+        "expected_row_offset": 17.2,
+        "row_offset_tolerance": 4.0
     },
 
     "bpm": {

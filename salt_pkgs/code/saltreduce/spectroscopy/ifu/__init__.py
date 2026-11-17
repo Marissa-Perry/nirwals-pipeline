@@ -4,5 +4,6 @@ name = "ifu"
 from .saltifu import find_fibres
 from .saltifu import set_fibre_traces
 from .saltifu import trace_fibres
+from .saltifu import realign_fibre_identities
 from .saltifu import extract_fibres
 from .saltifu import get_plot_dir

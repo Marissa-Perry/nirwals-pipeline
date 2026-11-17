@@ -39,6 +39,7 @@ from .....saltutility.logging import logging
 from ...spectroscopy.ifu import find_fibres
 from ...spectroscopy.ifu import set_fibre_traces
 from ...spectroscopy.ifu import trace_fibres
+from ...spectroscopy.ifu import realign_fibre_identities
 # - functions
 from ...functions import Fit1D
 from ...functions import ipc_correction_global
@@ -861,6 +862,8 @@ def prepare_fibres_config_entries(config_p, flat_files, log):
             work['rows'], work['cols'] = image.shape
             # Set exposure config id in work dictionary
             work['config'] = set_exposure_config_id(hdulist, work)
+            # Set this flat's own FIBERMAP data in work dictionary
+            work['fibre_map'] = hdulist['FIBERMAP'].data.copy() if 'FIBERMAP' in hdulist else None
 
         # Set latest db traces dictionary
         db_traces = config_f['db']['traces']
@@ -912,6 +915,8 @@ def prepare_fibres_config_entries(config_p, flat_files, log):
 
         # Check trace success indicator
         if success:
+            # Realign fibre identities against this flat's own FIBERMAP ground truth
+            realign_fibre_identities(traces, work, log)
             # Update fibre traces in fibres config
             updated = update_fibres_config(updated, config_f, traces, work, log)
             # Plot fibre traces
