@@ -1196,6 +1196,11 @@ def plot_fibre_traces(out_name, fibres, windows, traces, work, log):
     # Initialise 1D column pixel array
     cols = np.arange(work['cols'], dtype=np.float32)
 
+    # Set slit id lookup, keyed by (ifu_id, type)
+    slit_id_by_identity = {}
+    for f in work['fibres'].values():
+        slit_id_by_identity[(f['ifu_id'], f['type'])] = f['slit_id']
+
     # Loop for nr of fibre blocks (start at 1)...
     for block in range(1, work['nr_of_blocks'] + 1):
 
@@ -1287,10 +1292,16 @@ def plot_fibre_traces(out_name, fibres, windows, traces, work, log):
                 # - plot
                 ax.plot(cols, ft, **plot_dict['fit'])
 
+            # Set rejected indicator and corrected slit id
+            rejected = t['ifu_id'] < 0
+            label_id = 'x' if rejected else slit_id_by_identity.get((t['ifu_id'], t['type']), t['slit_id'])
+
             # Fill area between lower and upper trace
-            ax.fill_between(cols, fl, fu, **plot_dict['fill'])
+            fill_dict = plot_dict['fill'].copy()
+            if rejected: fill_dict['color'] = 'black'
+            ax.fill_between(cols, fl, fu, **fill_dict)
             # Add secondary y-axis tick and tick label
-            yticks.append((fl[-1]+fu[-1])/2.); yticklabels.append(t['slit_id'])
+            yticks.append((fl[-1]+fu[-1])/2.); yticklabels.append(label_id)
 
         # Set secondary y-ticks
         axy2.set_yticks(yticks)

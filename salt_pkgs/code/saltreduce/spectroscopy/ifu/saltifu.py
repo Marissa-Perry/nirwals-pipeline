@@ -380,24 +380,34 @@ def realign_fibre_identities(traces, work, log):
             assigned_to[i] = j
             claimed[j] = True
 
-    # Pass 2: forced match for anything left over, no tolerance limit
-    n_forced = 0
-    for i in range(n):
-        if assigned_to[i] >= 0 or not np.isfinite(detected[i]):
-            continue
-        available = np.where(np.isfinite(expected) & ~claimed)[0]
-        if len(available) == 0:
-            continue
-        j = available[np.argmin(np.abs(expected[available] - detected[i]))]
-        assigned_to[i] = j
-        claimed[j] = True
-        n_forced += 1
+    # Set forced match tolerance
+    forced_tolerance = work['trace'].get('forced_row_offset_tolerance')
 
-    # Apply matched identities
+    # Pass 2: forced match for anything left over, within forced_row_offset_tolerance
+    n_forced = 0
+    if forced_tolerance is not None:
+        for i in range(n):
+            if assigned_to[i] >= 0 or not np.isfinite(detected[i]):
+                continue
+            available = np.where(np.isfinite(expected) & ~claimed)[0]
+            if len(available) == 0:
+                continue
+            j = available[np.argmin(np.abs(expected[available] - detected[i]))]
+            if abs(expected[j] - detected[i]) <= forced_tolerance:
+                assigned_to[i] = j
+                claimed[j] = True
+                n_forced += 1
+
+    # Apply matched identities; mark anything whose own identity was claimed elsewhere invalid
     n_relabeled = 0
+    n_invalidated = 0
     for i in range(n):
         j = assigned_to[i]
         if j < 0:
+            # Own original identity was claimed by another fibre id in the meantime: no safe identity left
+            if claimed[i]:
+                n_invalidated += 1
+                traces['fibres'][ids[i]]['ifu_id'] = -n_invalidated
             continue
         if (ifu_ids[j], types[j]) != (ifu_ids[i], types[i]):
             n_relabeled += 1
@@ -405,15 +415,23 @@ def realign_fibre_identities(traces, work, log):
         traces['fibres'][ids[i]]['type'] = types[j]
         traces['fibres'][ids[i]]['block'] = blocks[j]
 
-    # Set nr of unresolved fibre ids
-    n_unresolved = int(np.sum(assigned_to < 0))
+    # Set nr of fibre ids left with a safe, unclaimed, best-effort original identity
+    n_unresolved = int(np.sum((assigned_to < 0) & ~claimed))
 
     # Add message to log
-    msg = '   - relabeled: {0}, forced: {1}, unresolved: {2}'.format(n_relabeled, n_forced, n_unresolved)
+    msg = '   - relabeled: {0}, forced: {1}, unresolved: {2}, invalidated: {3}'.format(n_relabeled, n_forced, n_unresolved, n_invalidated)
     log.message(msg, with_header=False)
+    if n_forced:
+        # Add message to log
+        msg = '   - WARNING: {0} fibre id(s) left with forced, lower-confidence identity'.format(n_forced)
+        log.message(msg, with_header=False)
     if n_unresolved:
         # Add message to log
         msg = '   - WARNING: {0} fibre id(s) left with unverified identity'.format(n_unresolved)
+        log.message(msg, with_header=False)
+    if n_invalidated:
+        # Add message to log
+        msg = '   - WARNING: {0} fibre id(s) had their original identity claimed by another fibre id: IFU_ID set to a unique negative sentinel'.format(n_invalidated)
         log.message(msg, with_header=False)
 
     return

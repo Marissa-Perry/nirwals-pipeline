@@ -24,7 +24,8 @@
         "point_tolerance": 1.5,
         "min_points_pc": 50.0,
         "expected_row_offset": 17.2,
-        "row_offset_tolerance": 4.0
+        "row_offset_tolerance": 4.0,
+        "forced_row_offset_tolerance": 12.0
     },
 
     "bpm": {
