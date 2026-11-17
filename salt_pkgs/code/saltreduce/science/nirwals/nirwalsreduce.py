@@ -951,13 +951,19 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
     # Stack per-pixel variance image: fibre type 'all'
     variance_image = stack_fibre_image(traces, work['variances'])
+    # Row identity (IFU_ID/TYPE/BLOCK), same order as the stacked images above
+    fibermap = {
+        'ifu_id': [traces[fid]['ifu_id'] for fid in fibres.keys()],
+        'type': [traces[fid]['type'] for fid in fibres.keys()],
+        'block': [traces[fid]['block'] for fid in fibres.keys()],
+    }
 
     # Add rectified (wavelength calibrated) header key
     value = time.asctime(time.localtime())
     comment = 'Image has been wavelength calibrated'
     hdu['Primary'].header['WAVECAL'] = (value, comment)
     # Write new fits file: extracted 'all' fibres
-    write_new_fits(hdu, fibre_image, gpcnt_image, '', 'a', work, log, variance_image=variance_image)
+    write_new_fits(hdu, fibre_image, gpcnt_image, '', 'a', work, log, variance_image=variance_image, fiber_ids=fibermap)
 
     # Reset 1D wavelength pixel (columns) array for original nr of columns
     work['p'] = np.arange(work['cols'], dtype=np.float32)
@@ -971,19 +977,19 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     # Fit and subtract continuum, using the sky exposure's own skyline mask for the science frame
     cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log, sky_bundle_mask)
     # Write new fits file: continuum fit
-    write_new_fits(hdu, cf_image, None, '', 'cf', work, log)
+    write_new_fits(hdu, cf_image, None, '', 'cf', work, log, fiber_ids=fibermap)
     # Write new fits file: continuum subtracted
-    write_new_fits(hdu, cs_image, None, '', 'cs', work, log)
+    write_new_fits(hdu, cs_image, None, '', 'cs', work, log, fiber_ids=fibermap)
 
     # Fit spectral channels (object-bundle fibers only)
     sf_image = fit_spectral_channels(cs_image, work, log, sky_bundle_mask)
     # Write new fits file: spectral channels fit
-    write_new_fits(hdu, sf_image, None, '', 'sf', work, log)
+    write_new_fits(hdu, sf_image, None, '', 'sf', work, log, fiber_ids=fibermap)
 
     # Check if exposure type is 'science'
     if work['exp_type'] == 'science':
         # Subtract sky (object-bundle fibers only)
-        sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image, variance_image_sky_sub = subtract_sky(
+        sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image, variance_image_sky_sub, fiber_ids_obj = subtract_sky(
             hdu, cf_image, cs_image, sf_image, sky_bundle_mask, variance_image, gpcnt_image, list(fibres.keys()), work, log)
         skycorr_ss = sky_cs_scaled
         skycorr_ssc = skycorr_ss
@@ -992,10 +998,16 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
         # Match gpcnt_image to subtract_sky's object-bundle-only rows
         obj_bundle_mask = ~sky_bundle_mask
         gpcnt_image_obj = gpcnt_image[obj_bundle_mask]
+        # Row identity (IFU_ID/TYPE/BLOCK), same order as subtract_sky's object-bundle-only rows
+        fibermap_obj = {
+            'ifu_id': [traces[fid]['ifu_id'] for fid in fiber_ids_obj],
+            'type': [traces[fid]['type'] for fid in fiber_ids_obj],
+            'block': [traces[fid]['block'] for fid in fiber_ids_obj],
+        }
         # Write new fits file: sky subtracted without continuum
-        write_new_fits(hdu, sci_image, gpcnt_image_obj, '', 'ss', work, log, skycorr=skycorr_ss, variance_image=variance_image_sky_sub)
+        write_new_fits(hdu, sci_image, gpcnt_image_obj, '', 'ss', work, log, skycorr=skycorr_ss, variance_image=variance_image_sky_sub, fiber_ids=fibermap_obj)
         # Write new fits file: sky subtracted with continuum
-        write_new_fits(hdu, sci_image_with_cont, gpcnt_image_obj, '', 'ssc', work, log, skycorr=skycorr_ssc, variance_image=variance_image_sky_sub)
+        write_new_fits(hdu, sci_image_with_cont, gpcnt_image_obj, '', 'ssc', work, log, skycorr=skycorr_ssc, variance_image=variance_image_sky_sub, fiber_ids=fibermap_obj)
 
     return
 
@@ -2238,7 +2250,7 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
                 gpcnt_native[i])
 
     return (sci_image[obj_bundle_mask], sci_image_with_cont[obj_bundle_mask], sky_cs_scaled[obj_bundle_mask],
-            sky_cf_image_scaled[obj_bundle_mask], variance_image_sky_sub[obj_bundle_mask])
+            sky_cf_image_scaled[obj_bundle_mask], variance_image_sky_sub[obj_bundle_mask], fiber_ids_obj)
 
 
 # ---------------------------------------------------------------------------- #
@@ -2732,7 +2744,7 @@ def stack_fibre_image(traces, fibres, fibre_type='all', dtype=np.float32):
     return fibre_image
 
 # ---------------------------------------------------------------------------- #
-def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=None, variance_image=None):
+def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=None, variance_image=None, fiber_ids=None):
 # ---------------------------------------------------------------------------- #
 
     # Check new image
@@ -2788,6 +2800,20 @@ def write_new_fits(hdu, new_image, gp_image, prefix, tag, work, log, skycorr=Non
         hdu_mask = fits.ImageHDU(data=mask, name='MASK')
         hdu_mask.header['EXTNAME'] = ('MASK', 'bad-pixel mask (1 = bad, gpcnt == 0)')
         hdu_new.append(hdu_mask)
+
+    # --- FIBERMAP (row identity: IFU_ID/TYPE/BLOCK, same row order as FLUX) ---
+    if fiber_ids is not None:
+        ifu_id = np.asarray(fiber_ids['ifu_id'], dtype=np.int32)
+        ftype = np.array(fiber_ids['type'])
+        block = np.asarray(fiber_ids['block'], dtype=np.int32)
+        cols = fits.ColDefs([
+            fits.Column(name='IFU_ID', format='J', array=ifu_id),
+            fits.Column(name='TYPE', format='3A', array=ftype),
+            fits.Column(name='BLOCK', format='J', array=block),
+        ])
+        hdu_fibermap = fits.BinTableHDU.from_columns(cols, name='FIBERMAP')
+        hdu_fibermap.header['EXTNAME'] = ('FIBERMAP', 'row identity: IFU_ID/TYPE/BLOCK, same order as FLUX')
+        hdu_new.append(hdu_fibermap)
 
     # --- 4 WAVE ---
     hdu_wave = fits.ImageHDU(data=np.asarray(work['we'], dtype=np.float32), name='WAVE')
