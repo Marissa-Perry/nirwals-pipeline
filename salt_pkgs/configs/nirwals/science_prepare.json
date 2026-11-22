@@ -20,6 +20,7 @@
     "trace": {
         "fit": {"function": "polynomial", "order": 2, "niter": 5},
         "window": {"size": 256, "step": 128},
+        "window_match_tolerance": 3.0,
         "clip": {"sigma": 3.0, "cenfunc": "mean"},
         "point_tolerance": 1.5,
         "min_points_pc": 50.0,

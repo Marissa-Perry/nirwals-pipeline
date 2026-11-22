@@ -33,6 +33,8 @@ def find_fibres(image, axis, work, log):
 # ---------------------------------------------------------------------------- #
 
     """
+    Fibres are tracked across windows by nearest row position.
+
     image: <numpy array> 2D image array
     axis: <int> dispersion axis (0=vertical, 1=horizontal)
     work: <dict> work dictionary with parameters for finding fibres
@@ -65,24 +67,10 @@ def find_fibres(image, axis, work, log):
     msg = ' - find fibres'
     log.message(msg, with_header=False)
 
-    # Initialise fibres dictionary
-    fibres = {}
-    # Initialise windows list
-    windows = []
-    # Initialise profiles list
-    profiles = []
-
-    # Loop for nr of fibres...
-    for i in range(work['nr_of_fibres']):
-
-        # Set fibre id
-        id = '{0:03d}'.format(i + 1)
-        # Initialise fibres dictionary entry
-        # fibres[id] = {'centres': [], 'ranges': [], 'widths': []}
-        fibres[id] = {'ranges': [], 'widths': []}
-
     # Set trace window dictionary from parameters
     window = work['trace']['window']
+    # Set cross-window position-matching tolerance
+    match_tolerance = work['trace']['window_match_tolerance']
     # Set nr of image columns
     cols = image.shape[1]
     # Set nr of windows
@@ -90,31 +78,68 @@ def find_fibres(image, axis, work, log):
     # Initialise window range
     r0 = 0; r1 = window['size']
 
+    # Initialise tracks list (of fiber positions across windows)
+    tracks = []
+    # Initialise windows list
+    windows = []
+    # Initialise profiles list
+    profiles = []
+
     # Loop for nr of windows...
-    for _ in range(n_win + 1):
+    for win_idx in range(n_win + 1):
 
         # Horizontal => window columns
         w_image = image[:, r0:r1]
         # Find features in windowed image
         features, profile = find_fibre_features(w_image, axis, work)
 
-        # Loop for nr of fibres...
-        for i in range(work['nr_of_fibres']):
+        # Set this window's features, in row-position order
+        feature_ids = sorted(features.keys())
+        feature_ranges = [features[fid]['range'] for fid in feature_ids]
+        feature_widths = [features[fid]['width'] for fid in feature_ids]
+        feature_positions = [0.5 * (r[0] + r[1]) for r in feature_ranges]
+        claimed_feature = [False] * len(feature_ids)
 
-            # Set fibre id
-            id = '{0:03d}'.format(i + 1)
-            # Check if fibre id is in features dictionary
-            if id in features:
-                # Add feature details to fibres dictionary
-                # fibres[id]['centres'].append(features[id]['centre'])
-                fibres[id]['ranges'].append(features[id]['range'])
-                fibres[id]['widths'].append(features[id]['width'])
+        if win_idx == 0:
+            # Each feature starts its own track
+            for pos, rng, wid in zip(feature_positions, feature_ranges, feature_widths):
+                tracks.append({'ranges': [rng], 'widths': [wid], 'last_pos': pos})
 
-            else:
-                # Add NaN to fibres dictionary
-                # fibres[id]['centres'].append(np.nan)
-                fibres[id]['ranges'].append([np.nan, np.nan])
-                fibres[id]['widths'].append(np.nan)
+        else:
+            # Match each existing track to the nearest unclaimed feature in window
+            for track in tracks:
+                # Nearest unclaimed feature
+                nearest_f = -1
+                nearest_dist = None
+                for f_idx, pos in enumerate(feature_positions):
+                    if claimed_feature[f_idx]:
+                        continue
+                    dist = abs(pos - track['last_pos'])
+                    if nearest_dist is None or dist < nearest_dist:
+                        nearest_dist = dist
+                        nearest_f = f_idx
+
+                # Check if nearest feature is within tolerance
+                if nearest_f >= 0 and nearest_dist <= match_tolerance:
+                    # Extend fiber track with matched feature
+                    track['ranges'].append(feature_ranges[nearest_f])
+                    track['widths'].append(feature_widths[nearest_f])
+                    track['last_pos'] = feature_positions[nearest_f]
+                    claimed_feature[nearest_f] = True
+
+                else:
+                    # No match this window
+                    track['ranges'].append([np.nan, np.nan])
+                    track['widths'].append(np.nan)
+
+            # Unclaimed features get a new track in window
+            for f_idx, pos in enumerate(feature_positions):
+                if claimed_feature[f_idx]:
+                    continue
+                # No matches in previous windows
+                new_ranges = [[np.nan, np.nan]] * win_idx + [feature_ranges[f_idx]]
+                new_widths = [np.nan] * win_idx + [feature_widths[f_idx]]
+                tracks.append({'ranges': new_ranges, 'widths': new_widths, 'last_pos': pos})
 
         # Add window range to windows list
         windows.append([r0, r1])
@@ -130,9 +155,44 @@ def find_fibres(image, axis, work, log):
             # Increment window range
             r0 += window['step']; r1 = min(r1 + window['step'], cols)
 
+    # Set nr of processed windows
+    n_windows = len(windows)
+
+    # Loop tracks...
+    for track in tracks:
+
+        # Pad any track shorter than the full window count
+        while len(track['ranges']) < n_windows:
+            track['ranges'].append([np.nan, np.nan])
+            track['widths'].append(np.nan)
+
+    # Set each track's first valid position
+    sort_keys = []
+    for track in tracks:
+        first_pos = np.inf
+        for r in track['ranges']:
+            if not np.isnan(r[0]):
+                first_pos = 0.5 * (r[0] + r[1])
+                break
+        sort_keys.append(first_pos)
+
+    # Sort tracks by first valid position
+    order = np.argsort(sort_keys)
+    tracks = [tracks[i] for i in order]
+
+    # Build fibres dictionary, keyed by row-ascending ID
+    fibres = {}
+    for i, track in enumerate(tracks):
+        id = '{0:03d}'.format(i + 1)
+        fibres[id] = {'ranges': track['ranges'], 'widths': track['widths']}
+
     # Add message to log
     msg = '   - nr of fibres: {0}'.format(len(fibres))
     log.message(msg, with_header=False)
+    if len(fibres) != work['nr_of_fibres']:
+        # Add message to log
+        msg = '   - WARNING: nr of fibres found ({0}) does not match nr_of_fibres ({1})'.format(len(fibres), work['nr_of_fibres'])
+        log.message(msg, with_header=False)
 
     return fibres, windows, profiles
 
@@ -189,7 +249,7 @@ def find_fibre_features(image, axis, work):
     return features, profile
 
 # ---------------------------------------------------------------------------- #
-def set_fibre_traces(fibres_config, work, log):
+def set_fibre_traces(fibres_config, fibres, work, log):
 # ---------------------------------------------------------------------------- #
 
     # Check if exposure config is in existing fibre traces
@@ -210,6 +270,14 @@ def set_fibre_traces(fibres_config, work, log):
             'reference': work['flat']['reference'],
             'fibres': copy.deepcopy(work['fibres'])
         }
+
+    # Add a placeholder entry for any detected fibre id beyond the static catalog
+    for id in fibres.keys():
+        if id not in traces['fibres']:
+            traces['fibres'][id] = {
+                'ifu_id': None, 'type': None, 'slit_id': None, 'block': None,
+                'lower_trace': [], 'upper_trace': []
+            }
 
     return traces
 
@@ -248,34 +316,22 @@ def trace_fibres(traces, fibres, windows, work, log):
     # Convert mid-points list to array
     mid_points = np.array(mid_points)
 
-    # Initialise fibre trace lists
-    lower_trace = [[] for _ in range(work['nr_of_fibres'])]
-    upper_trace = [[] for _ in range(work['nr_of_fibres'])]
-
-    # Loop for nr of fibres...
-    for i in range(work['nr_of_fibres']):
-
-        # Set fibre id
-        id = '{0:03d}'.format(i + 1)
-        # Check if fibre id is in fibres dictionary
-        if id in fibres:
-            # Set traces:
-            # - lower
-            lower_trace[i] = [r[0] for r in fibres[id]['ranges']]
-            # - upper
-            upper_trace[i] = [r[1] for r in fibres[id]['ranges']]
+    # Set fibre ids, from the detected fibres dictionary (may differ from nr_of_fibres)
+    ids = list(fibres.keys())
 
     # Set minimum nr of points required for trace
     min_points = int(len(mid_points) * work['trace']['min_points_pc'] / 100)
+    # Set flat-line placeholder coefficients for an untraceable fibre id
+    zero_coef = [0.0] * (work['trace']['fit']['order'] + 1)
 
-    # Loop for traces...
-    for i, t in enumerate(list(zip(lower_trace, upper_trace))):
+    # Loop for fibre ids...
+    for id in ids:
 
-        # Set fibre id
-        id = '{0:03d}'.format(i + 1)
-        # Convert traces to arrays
-        l_trace = np.array(t[0])
-        u_trace = np.array(t[1])
+        # Set traces:
+        # - lower
+        l_trace = np.array([r[0] for r in fibres[id]['ranges']])
+        # - upper
+        u_trace = np.array([r[1] for r in fibres[id]['ranges']])
 
         # Set mask for greater than zero lower trace points
         gz = l_trace > 0.
@@ -285,7 +341,11 @@ def trace_fibres(traces, fibres, windows, work, log):
             msg = ('   - not enough trace points to determine fibre trace: '
                    'Fibre {0}').format(id)
             log.message(msg, with_header=False)
-            return False, traces
+            # Flag fibre id as untraceable
+            traces['fibres'][id]['lower_trace'] = zero_coef
+            traces['fibres'][id]['upper_trace'] = zero_coef
+            traces['fibres'][id]['trace_failed'] = True
+            continue
 
         # Fit lower trace
         lower_fit = fit_trace(mid_points[gz], l_trace[gz], work['trace']['fit'])
@@ -295,7 +355,11 @@ def trace_fibres(traces, fibres, windows, work, log):
             msg = ('   - fitting lower trace returned NaN coefficient(s): '
                    'Fibre {0}').format(id)
             log.message(msg, with_header=False)
-            return False, traces
+            # Flag fibre id as untraceable
+            traces['fibres'][id]['lower_trace'] = zero_coef
+            traces['fibres'][id]['upper_trace'] = zero_coef
+            traces['fibres'][id]['trace_failed'] = True
+            continue
 
         # Fit upper trace
         upper_fit = fit_trace(mid_points[gz], u_trace[gz], work['trace']['fit'])
@@ -305,7 +369,11 @@ def trace_fibres(traces, fibres, windows, work, log):
             msg = ('   - fitting upper trace returned NaN coefficient(s): '
                    'Fibre {0}').format(id)
             log.message(msg, with_header=False)
-            return False, traces
+            # Flag fibre id as untraceable
+            traces['fibres'][id]['lower_trace'] = zero_coef
+            traces['fibres'][id]['upper_trace'] = zero_coef
+            traces['fibres'][id]['trace_failed'] = True
+            continue
 
         # Set coefficients in fibres trace dictionary
         traces['fibres'][id]['lower_trace'] = lower_fit.coef.tolist()
@@ -346,10 +414,13 @@ def realign_fibre_identities(traces, work, log):
     ifu_ids = [traces['fibres'][id]['ifu_id'] for id in ids]
     types = [traces['fibres'][id]['type'] for id in ids]
     blocks = [traces['fibres'][id]['block'] for id in ids]
+    slit_ids = [traces['fibres'][id]['slit_id'] for id in ids]
 
     # Set detected trace centre (column 0) for each fibre id
     detected = np.full(n, np.nan)
     for i, id in enumerate(ids):
+        if traces['fibres'][id].get('trace_failed'):
+            continue
         lower = traces['fibres'][id]['lower_trace']
         upper = traces['fibres'][id]['upper_trace']
         if lower and upper:
@@ -364,7 +435,6 @@ def realign_fibre_identities(traces, work, log):
             expected[i] = match['ROW'][0] + offset
 
     # Match each detected trace to the nearest, not-yet-claimed expected position
-    # assigned_to[i] = j: fibre id i is re-identified as expected slot j
     assigned_to = np.full(n, -1, dtype=int)
     claimed = np.zeros(n, dtype=bool)
 
@@ -377,6 +447,7 @@ def realign_fibre_identities(traces, work, log):
             continue
         j = available[np.argmin(np.abs(expected[available] - detected[i]))]
         if abs(expected[j] - detected[i]) <= tolerance:
+            # fibre id i is re-identified as expected slot j
             assigned_to[i] = j
             claimed[j] = True
 
@@ -404,7 +475,7 @@ def realign_fibre_identities(traces, work, log):
     for i in range(n):
         j = assigned_to[i]
         if j < 0:
-            # Own original identity was claimed by another fibre id in the meantime: no safe identity left
+            # Own original identity was claimed by another fibre id
             if claimed[i]:
                 n_invalidated += 1
                 traces['fibres'][ids[i]]['ifu_id'] = -n_invalidated
@@ -414,6 +485,7 @@ def realign_fibre_identities(traces, work, log):
         traces['fibres'][ids[i]]['ifu_id'] = ifu_ids[j]
         traces['fibres'][ids[i]]['type'] = types[j]
         traces['fibres'][ids[i]]['block'] = blocks[j]
+        traces['fibres'][ids[i]]['slit_id'] = slit_ids[j]
 
     # Set nr of fibre ids left with a safe, unclaimed, best-effort original identity
     n_unresolved = int(np.sum((assigned_to < 0) & ~claimed))
@@ -431,7 +503,7 @@ def realign_fibre_identities(traces, work, log):
         log.message(msg, with_header=False)
     if n_invalidated:
         # Add message to log
-        msg = '   - WARNING: {0} fibre id(s) had their original identity claimed by another fibre id: IFU_ID set to a unique negative sentinel'.format(n_invalidated)
+        msg = '   - WARNING: {0} fibre id(s) had their IDs claimed by another fibre id: IFU_ID set to a unique negative sentinel'.format(n_invalidated)
         log.message(msg, with_header=False)
 
     return

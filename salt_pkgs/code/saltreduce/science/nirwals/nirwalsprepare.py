@@ -914,7 +914,7 @@ def prepare_fibres_config_entries(config_p, flat_files, log):
 
         try:
             # Set fibre traces dictionary
-            traces = set_fibre_traces(config_f, work, log)
+            traces = set_fibre_traces(config_f, fibres, work, log)
             # Trace fibres
             success, traces = trace_fibres(traces, fibres, windows, work, log)
 
@@ -926,10 +926,27 @@ def prepare_fibres_config_entries(config_p, flat_files, log):
         if success:
             # Realign fibre identities against this flat's own FIBERMAP ground truth
             realign_fibre_identities(traces, work, log)
+            # Plot fibre traces (before dropping/renumbering, so rejected sentinel
+            # entries stay aligned by position with their raw detected traces)
+            plot_fibre_traces(out_name, fibres, windows, traces, work, log)
+            # Drop any fibre id that didn't end up with a real, traceable identity
+            # (placeholder never claimed, explicitly invalidated, or untraceable)
+            junk_ids = [id for id, fib in traces['fibres'].items()
+                        if fib['ifu_id'] is None or fib['ifu_id'] < 0 or fib.get('trace_failed')]
+            for id in junk_ids:
+                del traces['fibres'][id]
+            if len(traces['fibres']) != work['nr_of_fibres']:
+                # Add message to log
+                msg = ('   - WARNING: {0} fibre(s) remain after dropping junk ids, expected {1}'
+                       ).format(len(traces['fibres']), work['nr_of_fibres'])
+                log.message(msg, with_header=False)
+            # Re-key surviving fibres as contiguous '001'..'{nr_of_fibres:03d}' in slit
+            # position order, so reduce-side code that looks up fixed id strings (e.g.
+            # work['centre_id']) or treats id-1 as an array index still finds every fibre
+            remaining = [traces['fibres'][id] for id in sorted(traces['fibres'].keys(), key=int)]
+            traces['fibres'] = {'{0:03d}'.format(i + 1): fib for i, fib in enumerate(remaining)}
             # Update fibre traces in fibres config
             updated = update_fibres_config(updated, config_f, traces, work, log)
-            # Plot fibre traces
-            plot_fibre_traces(out_name, fibres, windows, traces, work, log)
             # # Dump output
             # dump_output(fibres, windows, profiles, traces, work, log)
 
