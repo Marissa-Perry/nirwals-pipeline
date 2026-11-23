@@ -1839,16 +1839,20 @@ def product_flux_data(hdulist):
 
 
 # ---------------------------------------------------------------------------- #
-def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter):
+def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter, sci_var=None, sky_var=None):
 # ---------------------------------------------------------------------------- #
     '''
     Fit the multiplicative scale that matches the sky-frame sky lines to the
-    science-frame sky lines before subtraction, by minimizing the sky-subtracted
-    residual (sci - scale * sky) over the skyline pixels.
+    science-frame sky lines before subtraction, by minimizing the inverse-variance
+    weighted, sky-subtracted residual (sci - scale * sky) over the skyline pixels.
 
-    For each output element the scale is the least-squares projection
-        scale = sum(sky * sci) / sum(sky * sky)
-    evaluated over the skyline pixels only, with iterative sigma-clipping so bright line cores do not drag the fit.
+    For each output element the scale is the weighted least-squares projection
+        scale = sum(w * sky * sci) / sum(w * sky * sky)
+    where w = 1 / (sci_var + scale^2 * sky_var) is the inverse variance of the residual
+    itself, re-evaluated every iteration from the current scale estimate (starting from
+    scale=1). If sci_var/sky_var are not supplied, every fit pixel is weighted equally.
+    Evaluated over the skyline pixels only, with iterative sigma-clipping so bright line
+    cores do not drag the fit.
 
     sci_image : 2D continuum-subtracted science image (fibre x wavelength)
     sky_image : 2D continuum-subtracted sky image (fibre x wavelength)
@@ -1856,6 +1860,8 @@ def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter)
     axis      : axis to collapse when fitting -- axis=0 returns a per-wavelength (column) scale fit across fibres; axis=1 returns a per-fibre (row) scale fit across wavelengths
     n_sigma   : residual sigma-clipping threshold
     n_iter    : number of sigma-clipping iterations
+    sci_var   : 2D science-frame variance
+    sky_var   : 2D sky-frame variance
 
     return : 1D array of scale factors along the axis that was not collapsed
     '''
@@ -1864,13 +1870,22 @@ def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter)
     use = line_mask.copy()
     # Initialise the scale factors to unity (no scaling)
     scale = np.ones(sci_image.shape[1 - axis], dtype=np.float32)
+    weighted = sci_var is not None and sky_var is not None
 
     # Iterate: fit the projection, reject residual outliers, refit
     for _ in range(n_iter):
 
-        # Least-squares projection sum(sky*sci) / sum(sky*sky) over the fit pixels
-        num = np.sum(np.where(use, sky_image * sci_image, 0.0), axis=axis)
-        den = np.sum(np.where(use, sky_image * sky_image, 0.0), axis=axis)
+        # Inverse-variance weight of the residual (sci - scale*sky) at the current scale
+        # estimate; unweighted (w=1) if no variance arrays were supplied
+        if weighted:
+            resid_var = sci_var + np.expand_dims(scale, axis) ** 2 * sky_var
+            w = np.where(np.isfinite(resid_var) & (resid_var > 0), 1.0 / resid_var, 0.0)
+        else:
+            w = 1.0
+
+        # Weighted least-squares projection sum(w*sky*sci) / sum(w*sky*sky) over the fit pixels
+        num = np.sum(np.where(use, w * sky_image * sci_image, 0.0), axis=axis)
+        den = np.sum(np.where(use, w * sky_image * sky_image, 0.0), axis=axis)
 
         # Reset to unity, then set the scale only where there is sky signal to fit
         scale = np.ones_like(den, dtype=np.float32)
@@ -2100,11 +2115,16 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     n_sigma = work['sky_scaling']['n_sigma']
     n_iter = work['sky_scaling']['n_iter']
 
+    # Sky exposure's IVAR
+    sky_var_image = np.where(sky_a_ivar > 0, 1.0 / sky_a_ivar, np.inf).astype(np.float32) if sky_a_ivar is not None else None
+    # Science exposure's IVAR
+    sci_var_image = align_native_width(sci_variance_image, sci_cs_image.shape[1]) if sci_variance_image is not None else None
+
     # Scale the sky-frame sky lines onto the science-frame sky lines before subtracting
     # wavelength-dependent scale (per column), fit across fibres
-    scale_wave = sky_scale_projection(sci_cs_image, sky_cs_image, fit_line_mask, axis=0, n_sigma=n_sigma, n_iter=n_iter)
+    scale_wave = sky_scale_projection(sci_cs_image, sky_cs_image, fit_line_mask, axis=0, n_sigma=n_sigma, n_iter=n_iter, sci_var=sci_var_image, sky_var=sky_var_image)
     # residual fibre-dependent scale (per row), fit across wavelengths on the wavelength-scaled sky
-    scale_fiber = sky_scale_projection(sci_cs_image, sky_cs_image * scale_wave[None, :], fit_line_mask, axis=1, n_sigma=n_sigma, n_iter=n_iter)
+    scale_fiber = sky_scale_projection(sci_cs_image, sky_cs_image * scale_wave[None, :], fit_line_mask, axis=1, n_sigma=n_sigma, n_iter=n_iter, sci_var=sci_var_image, sky_var=None if sky_var_image is None else sky_var_image * scale_wave[None, :] ** 2)
     # Combined separable scaling image (fibre x wavelength)
     scaling_image = scale_fiber[:, None] * scale_wave[None, :]
 
@@ -2117,10 +2137,8 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     sky_cs_scaled = sky_cs_image * scaling_image_masked
     sci_image = sci_cs_image - sky_cs_scaled  # skylines subtracted !
 
-    # Sky exposure's own shot/read noise, scaled the same way as its flux (scale_wave/scale_fiber treated as exact)
-    if sky_a_ivar is not None:
-        # Convert sky exposure's IVAR to variance
-        sky_var_image = np.where(sky_a_ivar > 0, 1.0 / sky_a_ivar, np.inf).astype(np.float32)
+    # Sky exposure's shot/read noise, scaled by the applied sky-line scale factor
+    if sky_var_image is not None:
         skyline_subtraction_variance = (scaling_image_masked ** 2) * sky_var_image
     else:
         skyline_subtraction_variance = np.zeros_like(sci_cs_image, dtype=np.float32)
