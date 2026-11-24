@@ -162,6 +162,8 @@ def generate_bpm(obs_date, log, **kwargs):
     correct_neighbors = config['bpm'].get('crosstalk', {}).get('correct_neighbors', {}).get('apply', True)
     alpha_asym_3 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_3']
     alpha_asym_1 = config['bpm']['crosstalk']['correct_neighbors']['alpha_asym_1']
+    max_source_counts = config['bpm']['crosstalk']['correct_neighbors']['max_source_counts']
+    max_source_rate = config['bpm']['crosstalk']['correct_neighbors']['max_source_rate']
     measured_3 = None
 
     # always check this night's own work directory for a pre-generated BPM
@@ -202,6 +204,9 @@ def generate_bpm(obs_date, log, **kwargs):
 
     longest_exptime = max(combined_darks) if combined_darks else None
     longest_dark_data = combined_darks.get(longest_exptime)
+    longest_dark_max_t_exp = None
+    if longest_exptime is not None:
+        longest_dark_max_t_exp = np.mean([fits.getdata(f, 'MAX_T_EXP') for f in dark_groups[longest_exptime]], axis=0)
     longest_dark_med = longest_dark_sig = None
     if longest_dark_data is not None:
         finite = np.isfinite(longest_dark_data)
@@ -385,7 +390,8 @@ def generate_bpm(obs_date, log, **kwargs):
                 # isolated hot pixels for calibration are flagged at the same threshold as the BPM's own dark-current component
                 alpha_threshold = longest_dark_med + bpm_thresh_sigma * longest_dark_sig
                 hot_pixel, alpha_candidates, nearby_count = isolated_hot_pixels(longest_dark_data, alpha_threshold, radius=isolation_radius)
-                alpha_asym_3, alpha_asym_1, alpha_sym, measured_3, measured_1, used_asym_3, used_asym_1 = build_alpha_maps(longest_dark_data, longest_dark_med, hot_pixel, alpha_candidates, nearby_count, alpha_asym_3, alpha_asym_1, min_measured=min_measured)
+                alpha_asym_3, alpha_asym_1, alpha_sym, measured_3, measured_1, used_asym_3, used_asym_1 = build_alpha_maps(longest_dark_data, longest_dark_med, hot_pixel, alpha_candidates, nearby_count, alpha_asym_3, alpha_asym_1, min_measured=min_measured,
+                    max_t_exp=longest_dark_max_t_exp, max_source_counts=max_source_counts, max_source_rate=max_source_rate)
                 if measured_3.sum() >= min_measured:
                     log.message('      - measured alpha for {0} isolated pixels ({1}-sigma hot-pixel thresh, {2}-pixel isolation radius): alpha_asym_3={3:.4f}, alpha_asym_1={4:.4f}'.format(measured_3.sum(), bpm_thresh_sigma, isolation_radius, used_asym_3, used_asym_1), with_header=False)
                 else:
@@ -430,10 +436,11 @@ def generate_bpm(obs_date, log, **kwargs):
             with fits.open(prd_file, mode='update') as hdul:
                 # ------- add "BPM" hdu -------
                 hdu_names = [hdu.name for hdu in hdul]
-                # correct IPC crosstalk across this file's own SCI data; BPM-flagged pixels can't leak into their neighbors unless individually measured
+                # correct IPC crosstalk across this file's own SCI data
                 if correct_neighbors and SCI in hdu_names:
                     before = hdul[SCI].data
-                    after = ipc_correction_global(before, alpha_asym_3, alpha_asym_1, bpm=(bpm == 1), calibrated_pixel=measured_3)
+                    max_t_exp = hdul['MAX_T_EXP'].data if 'MAX_T_EXP' in hdu_names else None
+                    after = ipc_correction_global(before, alpha_asym_3, alpha_asym_1, bpm=(bpm == 1), calibrated_pixel=measured_3, max_t_exp=max_t_exp, max_source_counts=max_source_counts, max_source_rate=max_source_rate)
                     hdul[SCI].data = after
                     if prd_file == longest_dark_file:
                         ipc_correction_diagnostic_plot(before, after, bpm, measured_3, longest_dark_med, longest_exptime, bpm_dir)

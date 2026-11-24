@@ -16,7 +16,8 @@ def amp_reads_left_to_right(n_cols):
     return (amp_index % 2) == 1   # bright amp-boundary convention (readout directions point toward each other) -> odd amp index reads left-to-right
 
 
-def ipc_correction_global(image, alpha_asym_3, alpha_asym_1, bpm=None, calibrated_pixel=None):
+def ipc_correction_global(image, alpha_asym_3, alpha_asym_1, bpm=None, calibrated_pixel=None,
+                          max_t_exp=None, max_source_counts=None, max_source_rate=None):
     '''
     Approximate first-order inverse of the 4-neighbor IPC kernel, applied to every pixel.
     '''
@@ -30,7 +31,13 @@ def ipc_correction_global(image, alpha_asym_3, alpha_asym_1, bpm=None, calibrate
     gpm = np.ones(image.shape, dtype=bool) if bpm is None else ~bpm   # bad pixels don't get corrected themselves
     source_ok = gpm.copy()
     if calibrated_pixel is not None:
-        source_ok |= calibrated_pixel   # a bad-but-individually-measured hot pixel's real value still leaks onto its neighbors
+        # oversaturated values are not corrected
+        oversaturated = ~np.isfinite(image)
+        if max_t_exp is not None and max_source_counts is not None:
+            oversaturated |= (max_t_exp <= 0) | (np.abs(image) * max_t_exp > max_source_counts)
+        if max_source_rate is not None:
+            oversaturated |= np.abs(image) > max_source_rate
+        source_ok |= calibrated_pixel & ~oversaturated   # a bad-but-individually-measured hot pixel's real value still leaks onto its neighbors
     source = np.where(source_ok, image, 0.0)   # a bad, uncalibrated pixel can't leak a value onto its neighbors
     source_alpha_col = np.where(source_ok, alpha_asym_3, 0.0)   # a bad, uncalibrated pixel's own coupling strength can't leak either
     source_alpha_left = np.where(source_ok, alpha_toward_left, 0.0)
@@ -64,12 +71,19 @@ def leakage_caused_hotpixels(hot_pixel, candidates, nearby_count):
     return hot_pixel & ~candidates & (nearby_count == 2) & read_before_hot
 
 
-def build_alpha_maps(dark, med, hot_pixel, candidates, nearby_count, fallback_alpha_asym_3, fallback_alpha_asym_1, min_measured=100):
+def build_alpha_maps(dark, med, hot_pixel, candidates, nearby_count, fallback_alpha_asym_3, fallback_alpha_asym_1, min_measured=100,
+                     max_t_exp=None, max_source_counts=None, max_source_rate=None):
     '''
     Per-pixel alpha_asym_3, alpha_asym_1, and a diagnostic alpha_sym, measured from isolated hot pixels in dark.
     '''
     l_to_r = amp_reads_left_to_right(dark.shape[1])
     leakage_caused_hotpixel = leakage_caused_hotpixels(hot_pixel, candidates, nearby_count)
+    # oversaturated values are not corrected
+    oversaturated = ~np.isfinite(dark)
+    if max_t_exp is not None and max_source_counts is not None:
+        oversaturated |= (max_t_exp <= 0) | (np.abs(dark) * max_t_exp > max_source_counts)
+    if max_source_rate is not None:
+        oversaturated |= np.abs(dark) > max_source_rate
 
     all_asym_3_ests, all_asym_1_ests = [], []   # every candidate's raw estimate, for the frame-median fallback below
     coords_3, asym_3_ests = [], []   # pixels with a trustworthy asym_3, for per-pixel assignment
@@ -77,6 +91,8 @@ def build_alpha_maps(dark, med, hot_pixel, candidates, nearby_count, fallback_al
     for r, c in zip(*np.where(candidates | leakage_caused_hotpixel)):
         if r < 1 or r > dark.shape[0] - 2 or c < 1 or c > dark.shape[1] - 2:
             continue   # skip pixels at the detector edge
+        if oversaturated[r, c]:
+            continue   # oversaturated in this dark
         if not (l_to_r[c - 1] == l_to_r[c] == l_to_r[c + 1]):
             continue   # within an amplifier boundary "read first" isn't meaningful
         patch = dark[r-1:r+2, c-1:c+2] - med

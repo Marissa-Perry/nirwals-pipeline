@@ -36,7 +36,8 @@
             "b. pixels >= threshold.sigma are masked;",
             "c. crosstalk.correct_neighbors: deconvolves IPC per pixel, where the neighboring pixel read first gets alpha_asym_1, the other 3 share alpha_asym_3",
             "d. crosstalk.correct_neighbors.per_pixel_alpha: uses each isolated hot pixel's own measured alpha where available, else that night's median, else the default values defined;",
-            "e. crosstalk.isolation_radius: pixel distance defining an isolated hot pixel for alpha measurement"
+            "e. crosstalk.isolation_radius: pixel distance defining an isolated hot pixel for alpha measurement;",
+            "f. crosstalk.correct_neighbors.max_source_counts/max_source_rate: a calibrated hot pixel leaks onto its neighbors only where its value in that frame is physical (rate x MAX_T_EXP <= max_source_counts, rate <= max_source_rate)"
         ],
         "threshold": {
             "sigma": 5.0,
@@ -49,6 +50,8 @@
                 "apply": true,
                 "alpha_asym_3": 0.01,
                 "alpha_asym_1": 0.01,
+                "max_source_counts": 200000.0,
+                "max_source_rate": 50000.0,
                 "per_pixel_alpha": {
                     "apply": true,
                     "min_measured": 100
