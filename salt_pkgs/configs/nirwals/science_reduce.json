@@ -222,26 +222,29 @@
     },
     "sky_scaling": {
         "notes": [
-        "a. sky-line scale is fit by minimising the sky-subtracted residual (least-squares projection) over the sky-line pixels;",
-        "b. includes a wavelength-dependent term and a residual fibre-dependent term, fit in sequence;",
-        "c. n_sigma and n_iter set the iterative residual sigma-clipping that stops bright line cores from dragging the fit;",
-        "d. residual_sigma sets the threshold for flagging columns with real line flux not in the skyline catalog, used only for this scaling step"
+        "a. skyline scale is fit by minimising the sky-subtracted residual (least-squares projection) over the skyline pixels;",
+        "b. sky_frame: a wavelength-dependent term then a residual fibre-dependent term, fit in sequence; sky_bundle: a fibre-dependent term only;",
+        "c. n_sigma and n_iter set the iterative residual sigma-clipping that stops bright line cores from dragging the fit, and the sky-fibre clipping of the slit_profile fits;",
+        "d. residual_sigma sets the threshold for flagging columns with significant emission not in the skyline catalog, used only for scaling step;",
+        "e. sky = 'sky_frame' | 'sky_bundle': use a separate sky exposure or the science exposure's sky-bundle;",
+        "f. slit_profile_order = order of the polynomials in slit position: the sky-bundle model per wavelength, and the slit scaling of the sky continuum;",
+        "g. skip_for_objects = OBJECT name prefixes of calibration standards -- no residual-line flagging and no sky-continuum scaling, accounting for any leaked starlight in the sky-bundle"
         ],
         "n_sigma": 3,
         "n_iter": 3,
         "residual_sigma": 2,
+        "sky": "sky_frame",
+        "slit_profile_order": 6,
+        "skip_for_objects": ["HIP", "HD"],
         "continuum": {
             "notes": [
-                "a. the sky-frame continuum is scaled by a wavelength-dependent ratio of continuum fits to the sky-bundle's median spectrum (science/sky);",
+                "a. sky_frame: continuum is scaled by a wavelength-dependent ratio of continuum fits to the sky-bundle's median spectrum (science/sky), times a slit factor; sky_bundle: continuum model is scaled by each fibre's skyline scale, as a polynomial in slit position;",
                 "b. outside the columns passing continuum_floor the ratio is frozen at its nearest valid value;",
-                "c. continuum_floor = columns where either frame's continuum fit falls at or below this level [counts/s] are excluded;",
-                "d. min_sky_fibers = skip the correction if there are fewer valid sky-bundle fibers than this;",
-                "e. skip_for_objects = OBJECT name prefixes to always skip scaling for -- accounting for any leaked starlight in the sky-bundle"
+                "c. enable = 1 scales the sky continuum, 0 subtracts it unscaled;",
+                "d. continuum_floor = columns where either frame's continuum fit falls at or below this level [counts/s] are excluded"
             ],
             "enable": 1,
-            "min_sky_fibers": 3,
-            "continuum_floor": 0.1,
-            "skip_for_objects": ["HIP", "HD"]
+            "continuum_floor": 0.1
         }
     },
 

@@ -25,6 +25,8 @@ from astropy.stats import sigma_clip, mad_std
 # matplotlib imports
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as grid
+from matplotlib.colors import LinearSegmentedColormap
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 # Local application imports
 # - saltutility.keys
@@ -973,6 +975,9 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     gpcnt_image = stack_fibre_image(traces, work['good_pixels'])
     # Row mask for the sky-bundle fibres, same row order as image/gpcnt_image
     sky_bundle_mask = np.array([traces[fid]['type'] == 'sky' for fid in fibres.keys()])
+    # Slit position of each fibre
+    mid_col = hdu[SCI].data.shape[1] / 2.
+    work['slit_pos'] = np.array([get_fibre_centre(traces[fid], mid_col, work) for fid in fibres.keys()], dtype=float)
 
     # Fit and subtract continuum, using the sky exposure's own skyline mask for the science frame
     cf_image, cs_image = fit_and_subtract_continuum_for_image(hdu, 'sci', image, work, log, sky_bundle_mask)
@@ -990,7 +995,7 @@ def reduce_science(hdu, solutions, traces, fibres, work, log):
     if work['exp_type'] == 'science':
         # Subtract sky (object-bundle fibers only)
         sci_image, sci_image_with_cont, sky_cs_scaled, sky_cf_image, variance_image_sky_sub, fiber_ids_obj = subtract_sky(
-            hdu, cf_image, cs_image, sf_image, sky_bundle_mask, variance_image, gpcnt_image, list(fibres.keys()), work, log)
+            hdu, cf_image, cs_image, sky_bundle_mask, variance_image, gpcnt_image, list(fibres.keys()), work, log)
         skycorr_ss = sky_cs_scaled
         skycorr_ssc = skycorr_ss
         if sky_cs_scaled is not None and sky_cf_image is not None:
@@ -1842,34 +1847,19 @@ def product_flux_data(hdulist):
 def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter, sci_var=None, sky_var=None):
 # ---------------------------------------------------------------------------- #
     '''
-    Fit the multiplicative scale that matches the sky-frame sky lines to the
-    science-frame sky lines before subtraction, by minimizing the inverse-variance
-    weighted, sky-subtracted residual (sci - scale * sky) over the skyline pixels.
+    Multiplicative scale that matches the sky-frame sky lines to the science-frame sky lines before subtraction.
 
-    For each output element the scale is the weighted least-squares projection
-        scale = sum(w * sky * sci) / sum(w * sky * sky)
-    where w = 1 / (sci_var + scale^2 * sky_var) is the inverse variance of the residual
-    itself, re-evaluated every iteration from the current scale estimate (starting from
-    scale=1). If sci_var/sky_var are not supplied, every fit pixel is weighted equally.
-    Evaluated over the skyline pixels only, with iterative sigma-clipping so bright line
-    cores do not drag the fit.
-
-    sci_image : 2D continuum-subtracted science image (fibre x wavelength)
-    sky_image : 2D continuum-subtracted sky image (fibre x wavelength)
-    line_mask : 2D boolean mask, True on the skyline pixels to fit over
-    axis      : axis to collapse when fitting -- axis=0 returns a per-wavelength (column) scale fit across fibres; axis=1 returns a per-fibre (row) scale fit across wavelengths
-    n_sigma   : residual sigma-clipping threshold
-    n_iter    : number of sigma-clipping iterations
-    sci_var   : 2D science-frame variance
-    sky_var   : 2D sky-frame variance
-
-    return : 1D array of scale factors along the axis that was not collapsed
+    Inverse-variance weighted least-squares projection over skyline pixels:
+            scale = sum(w * sky * sci) / sum(w * sky * sky)
+    where w = 1 / (sci_var + scale^2 * sky_var) is the inverse variance of the residual, 
+    re-evaluated every iteration from the current scale estimate (starting from scale=1)
     '''
 
     # Work on a copy of the fit mask so outliers can be rejected iteratively
     use = line_mask.copy()
     # Initialise the scale factors to unity (no scaling)
     scale = np.ones(sci_image.shape[1 - axis], dtype=np.float32)
+    scale_var = np.zeros_like(scale)
     weighted = sci_var is not None and sky_var is not None
 
     # Iterate: fit the projection, reject residual outliers, refit
@@ -1878,7 +1868,8 @@ def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter,
         # Inverse-variance weight of the residual (sci - scale*sky) at the current scale
         # estimate; unweighted (w=1) if no variance arrays were supplied
         if weighted:
-            resid_var = sci_var + np.expand_dims(scale, axis) ** 2 * sky_var
+            scale_2d = scale[None, :] if axis == 0 else scale[:, None]
+            resid_var = sci_var + scale_2d ** 2 * sky_var
             w = np.where(np.isfinite(resid_var) & (resid_var > 0), 1.0 / resid_var, 0.0)
         else:
             w = 1.0
@@ -1893,18 +1884,29 @@ def sky_scale_projection(sci_image, sky_image, line_mask, axis, n_sigma, n_iter,
         scale[good] = num[good] / den[good]
 
         # Sky-subtraction residual with the current scale
-        resid = sci_image - np.expand_dims(scale, axis) * sky_image
+        scale_2d = scale[None, :] if axis == 0 else scale[:, None]
+        resid = sci_image - scale_2d * sky_image
+        # Scale variance; from the residual scatter when unweighted
+        if weighted:
+            scale_var = np.where(good, 1. / np.where(good, den, 1.), 0.).astype(np.float32)
+        else:
+            n_use = np.sum(use, axis=axis)
+            chi2 = np.sum(np.where(use, resid ** 2, 0.0), axis=axis) / np.maximum(n_use - 1, 1)
+            scale_var = np.where(good, chi2 / np.where(good, den, 1.), 0.).astype(np.float32)
         # Robust scatter of the residual over the fit pixels (per collapsed line)
-        scatter = np.nanstd(np.where(use, resid, np.nan), axis=axis, keepdims=True)
+        scatter = mad_std(np.where(use, resid, np.nan), axis=axis, ignore_nan=True)
+        scatter = scatter[None, :] if axis == 0 else scatter[:, None]
         # Reject pixels beyond n_sigma * scatter before the next iteration
         use = use & (np.abs(resid) <= n_sigma * np.where(scatter > 0, scatter, np.inf))
 
-    return scale
+    return scale, scale_var
 
 # ---------------------------------------------------------------------------- #
 def crop_to_native_width(full, n_native):
 # ---------------------------------------------------------------------------- #
-    '''Crop a full (rectified) FLUX-width array back down to the native pixel width, so it can still be combined with a native-width variance_image.'''
+    '''
+    Crop a full (rectified) flux array back down to the native pixel width
+    '''
     off = full.shape[1] - n_native
     if off < 0:
         return full   # flux narrower than native -- write_new_fits does its own cropping from here
@@ -1913,7 +1915,9 @@ def crop_to_native_width(full, n_native):
 # ---------------------------------------------------------------------------- #
 def align_native_width(var, n_flux):
 # ---------------------------------------------------------------------------- #
-    '''Align a native-pixel-width per-fiber variance array onto the rectified FLUX width.'''
+    '''
+    Align a native-pixel-width per-fiber variance array onto the rectified FLUX width.
+    '''
     n_native = var.shape[1]
     off = n_flux - n_native
     if off < 0:
@@ -1923,9 +1927,47 @@ def align_native_width(var, n_flux):
     return aligned
 
 # ---------------------------------------------------------------------------- #
+def continuum_fit_variance(cs_image, cf_image, work):
+# ---------------------------------------------------------------------------- #
+    '''
+    Variance of each fibre's continuum fit from its interline scatter.
+    '''
+    fit_cfg = work['continuum']['sci']
+    order = fit_cfg['band_polyorder'][work['band']] if fit_cfg.get('band_polyorder') else fit_cfg['fit']['order']
+    x = work['we']
+    V = np.polynomial.legendre.legvander(2 * (x - x.min()) / (x.max() - x.min()) - 1, order)
+    var = np.zeros_like(cf_image, dtype=np.float32)
+    for i in range(cf_image.shape[0]):
+        fit = (cf_image[i] != 0) & ~work['skyline_mask'] & np.isfinite(cs_image[i])
+        if fit.sum() <= order + 1:
+            continue
+        cov = mad_std(cs_image[i, fit]) ** 2 * np.linalg.pinv(np.dot(V[fit].T, V[fit]))
+        var[i] = np.sum(np.dot(V, cov) * V, axis=1)
+    return np.where(cf_image != 0, var, 0.)
+
+# ---------------------------------------------------------------------------- #
+def skyline_relchi2(resid, var, n_fit):
+# ---------------------------------------------------------------------------- #
+    '''
+    Relative chi-square of sky-subtracted residuals per column, at least 1
+    (same method is used in SDSS skysubtract)
+    '''
+    ok = np.isfinite(resid) & np.isfinite(var) & (var > 0)
+    chi2 = np.where(ok, resid ** 2 / np.where(ok, var, 1.), np.nan)
+    n = ok.sum(axis=0)
+    good = n > n_fit + 1
+    relchi2 = np.ones(resid.shape[1])
+    # 67th percentile of each column, corrected for the fitted parameters
+    rel = np.nanquantile(chi2[:, good], 2. / 3., axis=0, method='inverted_cdf') * n[good] / (n[good] - n_fit)
+    relchi2[good] = np.clip(rel, 1, None)
+    return relchi2
+
+# ---------------------------------------------------------------------------- #
 def variance_of_median(var_bundle, valid_edge):
 # ---------------------------------------------------------------------------- #
-    '''Variance of the per-column nanmedian across valid rows.'''
+    '''
+    Variance of the per-column nanmedian across valid rows.
+    '''
     usable = valid_edge & np.isfinite(var_bundle) & (var_bundle > 0)
     n_valid = usable.sum(axis=0)
     mean_var = np.full(var_bundle.shape[1], np.inf, dtype=np.float32)
@@ -1937,8 +1979,10 @@ def variance_of_median(var_bundle, valid_edge):
 def fit_sky_bundle_continuum(sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
                               sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log):
 # ---------------------------------------------------------------------------- #
-    '''Sky-bundle median spectrum (science, sky), their continuum fits with fit uncertainty, and valid columns.'''
-    if sky_bundle_mask.sum() < cfg['min_sky_fibers']:
+    '''
+    Sky-bundle median spectrum (science, sky) and their continuum fits.
+    '''
+    if sky_bundle_mask.sum() < 3:
         return None, None, None, None, None, None, None
 
     raw_sci = (sci_cs_image + sci_cf_image)[sky_bundle_mask]
@@ -1978,122 +2022,322 @@ def fit_sky_bundle_continuum(sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs
     return med_sci, med_sky, obj_fit_curve, sky_fit_curve, obj_fit_err, sky_fit_err, valid
 
 # ---------------------------------------------------------------------------- #
-def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask, sci_variance_image, gpcnt_image, fiber_ids, work, log):
+def find_sky_product(key, trg_name, work, ext=None):
 # ---------------------------------------------------------------------------- #
+    for entry in work['exposures']['sky'][work['wrk_config']].get(key, []):
+        with fits.open(entry['file'], mode='readonly') as skyhdu:
+            if product_object(skyhdu) != trg_name:
+                continue
+            if ext is None:
+                return product_flux_data(skyhdu).copy()
+            if ext in [e.name for e in skyhdu]:
+                return skyhdu[ext].data.copy()
+    return None
 
-    # Add message to log
-    msg = ' - subtract sky'
-    log.message(msg, with_header=False)
-
-    # Set target name (OBJECT)
-    trg_name = hdu[PRIMARY].header['OBJECT']
-
+# ---------------------------------------------------------------------------- #
+def load_sky_frame(trg_name, work, log):
+# ---------------------------------------------------------------------------- #
     # Check sky exposures
     if 'sky' not in work['exposures'].keys():
         # Add message to log
         msg = '   - no sky images!'
         log.message(msg, with_header=False)
         # Get outa here!
-        return None, None, None, None, None
-
-    # Check sky continuum fit image
+        return None
     if work['wrk_config'] not in work['exposures']['sky'].keys():
         # Add message to log
         msg = '   - {0}: sky image not found!'.format(work['wrk_config'])
         log.message(msg, with_header=False)
         # Get outa here!
-        return None, None, None, None, None
+        return None
 
-    # Initialise sky continuum fit image
-    sky_cf_image = None
+    # Sky frame products for the target
+    sky_cf_image = find_sky_product('cf', trg_name, work)
+    sky_cs_image = find_sky_product('cs', trg_name, work)
+    for image, name in ((sky_cf_image, 'continuum fit'), (sky_cs_image, 'continuum subtracted')):
+        if image is None:
+            # Add message to log
+            msg = '   - {0}: sky {1} image not found!'.format(work['wrk_config'], name)
+            log.message(msg, with_header=False)
+            # Get outa here!
+            return None
+    # Sky exposure's per-fibre extraction variance
+    sky_a_ivar = find_sky_product('a', trg_name, work, ext='IVAR')
 
-    # Loop for sky continuum fit entries...
-    for sky_cf in work['exposures']['sky'][work['wrk_config']]['cf']:
+    return sky_cf_image, sky_cs_image, sky_a_ivar
 
-        # Open sky continuum fit image file
-        with fits.open(sky_cf['file'], mode='readonly') as skyhdu:
+# ---------------------------------------------------------------------------- #
+def select_isolated_sky_lines(work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    Column windows of isolated, catalog skylines.
+    '''
+    we = work['we']
 
-            # Check target name of sky continuum fit image file
-            if product_object(skyhdu) == trg_name:
-                # Set sky continuum fit image
-                sky_cf_image = product_flux_data(skyhdu).copy()
+    # Catalog lines within the wavelength range, and their FWHM
+    sky_waves = load_sky_lines(work, log)
+    sky_waves = sky_waves[(sky_waves > we[0]) & (sky_waves < we[-1])]
+    if sky_waves.size == 0:
+        return []
+    fwhm = sky_waves / evaluate_resolution(work['specres_fit'], sky_waves)
+    wmin, wmax = load_blended_sky_lines(work, log)
+
+    # Group lines too close to resolve
+    groups = [[0]]
+    for i in range(1, sky_waves.size):
+        if sky_waves[i] - sky_waves[groups[-1][-1]] < 0.6 * fwhm[i]:
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+
+    windows = []
+    for k, group in enumerate(groups):
+        lo, hi = sky_waves[group[0]], sky_waves[group[-1]]
+        f = fwhm[group].mean()
+        prev_hi = sky_waves[groups[k - 1][-1]] if k > 0 else -np.inf
+        next_lo = sky_waves[groups[k + 1][0]] if k < len(groups) - 1 else np.inf
+        # No other catalog line within 2.5 FWHM
+        isolated = (lo - prev_hi >= 2.5 * f) and (next_lo - hi >= 2.5 * f)
+        blended = np.any((hi >= wmin - f) & (lo <= wmax + f))
+        if isolated and not blended:
+            # Window of +/- 1.5 FWHM
+            cols = np.flatnonzero((we >= lo - 1.5 * f) & (we <= hi + 1.5 * f))
+            if cols.size:
+                windows.append(cols)
+
+    return windows
+
+# ---------------------------------------------------------------------------- #
+def integrated_line_fluxes(image, var, windows):
+# ---------------------------------------------------------------------------- #
+    '''
+    Summed flux and variance of each fibre in each column window.
+    '''
+    flux = np.full((image.shape[0], len(windows)), np.nan)
+    flux_var = np.full_like(flux, np.nan)
+    for j, cols in enumerate(windows):
+        sub, sub_var = image[:, cols], var[:, cols]
+        ok = np.all(np.isfinite(sub) & (sub != 0) & np.isfinite(sub_var), axis=1)
+        flux[ok, j] = sub[ok].sum(axis=1)
+        flux_var[ok, j] = sub_var[ok].sum(axis=1)
+    return flux, flux_var
+
+# ---------------------------------------------------------------------------- #
+def sky_bundle_template(image, var, sky_bundle_mask, work):
+# ---------------------------------------------------------------------------- #
+    '''
+    Spectral channel fit of sky-bundle fibres to generate a slit profile.
+    Variance comes from the sky fibres' scatter about the model.
+    '''
+    rows, cols = image.shape
+    sky = np.flatnonzero(sky_bundle_mask)
+    # Sky-fibre pixels with data and, when given, a valid variance
+    good = np.isfinite(image[sky]) & (image[sky] != 0)
+    if var is not None:
+        good &= np.isfinite(var[sky]) & (var[sky] > 0)
+    data = np.where(good, image[sky], np.nan)
+    model = np.full((rows, cols), np.nan)
+    model_var = np.full((rows, cols), np.nan)
+
+    cfg = work['sky_scaling']
+    order = cfg['slit_profile_order']
+    s = (work['slit_pos'] - work['slit_pos'].mean()) / work['slit_pos'].std()
+    A = np.vstack([s ** k for k in range(order + 1)]).T
+    # One weight per sky fibre
+    if var is None:
+        w = np.ones(sky.size)
+    else:
+        w = 1. / np.nanmedian(np.where(good, var[sky], np.nan), axis=1)
+        w = np.where(np.isfinite(w), w, 0.)
+    for c in range(cols):
+        use = good[:, c] & (w > 0)
+        if use.sum() <= order + 1:
+            continue
+        # Iterative sigma-clipping of sky fibres about the fit
+        for _ in range(cfg['n_iter']):
+            Au = A[sky[use]]
+            Aw = Au * w[use, None]
+            coef = np.linalg.solve(np.dot(Au.T, Aw), np.dot(Aw.T, data[use, c]))
+            resid = data[:, c] - np.dot(A[sky], coef)
+            keep = good[:, c] & (w > 0) & (np.abs(resid) <= cfg['n_sigma'] * mad_std(resid[use]))
+            if keep.sum() <= order + 1 or np.array_equal(keep, use):
                 break
+            use = keep
+        Au = A[sky[use]]
+        Aw = Au * w[use, None]
+        P = np.linalg.solve(np.dot(Au.T, Aw), Aw.T)   # coefficients = np.dot(P, y)
+        L = np.dot(A, P)                              # each fibre's model as a weighted sum of sky fibres
+        y = data[use, c]
+        model[:, c] = np.dot(L, y)
+        if var is None:
+            s2 = np.sum((y - np.dot(Au, np.dot(P, y))) ** 2) / (use.sum() - order - 1)
+            model_var[:, c] = np.sum(L ** 2, axis=1) * s2
+        else:
+            model_var[:, c] = np.dot(L ** 2, var[sky[use], c])
 
-    # Check sky continuum fit image
-    if sky_cf_image is None:
-        # Add message to log
-        msg = ('   - {0}: sky continuum fit image not found!'
-               ).format(work['wrk_config'])
-        log.message(msg, with_header=False)
-        # Get outa here!
-        return None, None, None, None, None
+    return model, model_var
 
-    # Initialise sky continuum subtracted image
-    sky_cs_image = None
+# ---------------------------------------------------------------------------- #
+def fibre_scale_model(values, rows, work):
+# ---------------------------------------------------------------------------- #
+    '''
+    Polynomial fit in slit position.
+    '''
+    cfg = work['sky_scaling']
+    order = cfg['slit_profile_order']
+    s = (work['slit_pos'] - work['slit_pos'].mean()) / work['slit_pos'].std()
+    A = np.vstack([s ** k for k in range(order + 1)]).T
+    good = rows & np.isfinite(values)
+    use = good.copy()
+    for _ in range(cfg['n_iter']):
+        coef = np.linalg.lstsq(A[use], values[use], rcond=None)[0]
+        fit_use = use
+        resid = values - np.dot(A, coef)
+        keep = good & (np.abs(resid) <= cfg['n_sigma'] * mad_std(resid[use]))
+        if keep.sum() <= order + 1 or np.array_equal(keep, use):
+            break
+        use = keep
+    # Fit covariance from the residual scatter of the fibres used
+    resid = values[fit_use] - np.dot(A[fit_use], coef)
+    s2 = np.sum(resid ** 2) / max(fit_use.sum() - (order + 1), 1)
+    cov = s2 * np.linalg.pinv(np.dot(A[fit_use].T, A[fit_use]))
+    model_var = np.sum(np.dot(A, cov) * A, axis=1)
+    return np.dot(A, coef), model_var, fit_use
 
-    # Loop for sky continuum subtracted entries...
-    for sky_cs in work['exposures']['sky'][work['wrk_config']]['cs']:
+# ---------------------------------------------------------------------------- #
+def model_sky_bundle(sci_cs_image, sci_cf_image, sci_var_image, sky_bundle_mask, scale_continuum, work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    Sky model in every fibre from the science frame's own sky-bundle fibres.
+    Sky fibres are flattened by their strong isolated skyline fluxes and modelled per wavelength across the slit.
+    '''
+    # Integrated flux of the isolated skylines in every fibre
+    windows = select_isolated_sky_lines(work, log)
+    flux, flux_var = integrated_line_fluxes(sci_cs_image, sci_var_image, windows)
+    # Strong lines: measured in every sky fibre, median sky-fibre S/N above 20
+    sky_flux = flux[sky_bundle_mask]
+    snr = np.nanmedian(sky_flux / np.sqrt(flux_var[sky_bundle_mask]), axis=0)
+    strong = np.flatnonzero(np.all(np.isfinite(sky_flux), axis=0) & (snr > 20))
+    if strong.size == 0:
+        raise SALTError('sky bundle: no strong isolated skylines to flatten the sky fibres')
+    strong_windows = [windows[j] for j in strong]
 
-        # Open sky continuum subtracted image file
-        with fits.open(sky_cs['file'], mode='readonly') as skyhdu:
+    # Skyflat: each fibre's median strong-line flux relative to the sky-bundle median
+    ref = np.nanmedian(sky_flux[:, strong], axis=0)
+    skyflat = np.nanmedian(flux[:, strong] / ref[None, :], axis=1)
+    flat = np.where(skyflat > 0, skyflat, np.nan)[:, None]
 
-            # Check target name of sky continuum subtracted image file
-            if product_object(skyhdu) == trg_name:
-                # Set sky continuum subtracted image
-                sky_cs_image = product_flux_data(skyhdu).copy()
-                break
+    # Sky model across the slit at every wavelength: skylines flattened; continuum flattened only when it is later scaled
+    cs_flat = sci_cs_image / flat
+    sky_cs_model, sky_cs_var = sky_bundle_template(cs_flat, sci_var_image / flat ** 2, sky_bundle_mask, work)
+    cf = sci_cf_image / flat if scale_continuum else sci_cf_image
+    sky_cf_model, sky_cf_var = sky_bundle_template(cf, None, sky_bundle_mask, work)
 
-    # Check sky continuum subtracted image
-    if sky_cs_image is None:
-        # Add message to log
-        msg = ('   - {0}: sky continuum subtracted image not found!'
-               ).format(work['wrk_config'])
-        log.message(msg, with_header=False)
-        # Get outa here!
-        return None, None, None, None, None
+    # Inputs of the sky-model diagnostic plot
+    plot_inputs = {'cs_flat': cs_flat, 'model': sky_cs_model, 'windows': strong_windows}
 
-    # Initialise sky spectral channels fit image
-    sky_sf_image = None
+    # No model where there is no model or the fibre itself has no data
+    valid = work['image_mask']
+    return (np.where(valid, np.nan_to_num(sky_cs_model), 0.), np.where(valid, np.nan_to_num(sky_cs_var), 0.),
+            np.where(valid, np.nan_to_num(sky_cf_model), 0.), np.where(valid, np.nan_to_num(sky_cf_var), 0.),
+            plot_inputs)
 
-    # Loop for sky spectral channels fit entries...
-    for sky_sf in work['exposures']['sky'][work['wrk_config']]['sf']:
+# ---------------------------------------------------------------------------- #
+def subtract_sky(hdu, sci_cf_image, sci_cs_image, sky_bundle_mask, sci_variance_image, gpcnt_image, fiber_ids, work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    Subtract skylines and the sky continuum from the object-bundle fibres.
+    '''
+    # Add message to log
+    msg = ' - subtract sky'
+    log.message(msg, with_header=False)
 
-        # Open sky spectral channels fit image file
-        with fits.open(sky_sf['file'], mode='readonly') as skyhdu:
-
-            # Check target name of sky spectral channels fit image file
-            if product_object(skyhdu) == trg_name:
-                # Set sky spectral channels fit image
-                sky_sf_image = product_flux_data(skyhdu).copy()
-                break
-
-    # Check sky spectral channels fit image
-    if sky_sf_image is None:
-        # Add message to log
-        msg = ('   - {0}: sky spectral channels fit image not found!'
-               ).format(work['wrk_config'])
-        log.message(msg, with_header=False)
-        # Get outa here!
-        return None, None, None, None, None
-
-    # Sky exposure's own per-fiber extraction variance, for weighting the sky-bundle continuum fit
-    sky_a_ivar = None
-    for sky_a in work['exposures']['sky'][work['wrk_config']].get('a', []):
-        with fits.open(sky_a['file'], mode='readonly') as skyhdu:
-            if product_object(skyhdu) == trg_name and 'IVAR' in [e.name for e in skyhdu]:
-                sky_a_ivar = skyhdu['IVAR'].data.copy()
-                break
+    # Set target name (OBJECT)
+    trg_name = hdu[PRIMARY].header['OBJECT']
+    # Set sky source: separate sky frame or the science frame's own sky bundle
+    sky = work['sky_scaling']['sky']
+    # Calibration standards: no residual-skyline flagging, no continuum scaling
+    is_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in work['sky_scaling']['skip_for_objects'])
+    # Sky-continuum scaling
+    scale_continuum = work['sky_scaling']['continuum']['enable'] and not is_standard
 
     obj_bundle_mask = ~sky_bundle_mask   # exclude sky-bundle fibres
 
-    # no sky skyline scaling for standard stars -- brightest fibers have negligible sky emission and difficult to accurately determine scale factor
-    is_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in work['sky_scaling']['continuum']['skip_for_objects'])
+    # Science exposure's IVAR
+    sci_var_image = align_native_width(sci_variance_image, sci_cs_image.shape[1]) if sci_variance_image is not None else None
+
+    if sky == 'sky_frame':
+        # Load sky frame images
+        sky_frame = load_sky_frame(trg_name, work, log)
+        # Check sky frame images
+        if sky_frame is None:
+            # Get outa here!
+            return None, None, None, None, None, None
+        sky_cf_image, sky_cs_image, sky_a_ivar = sky_frame
+        # Sky exposure's IVAR
+        sky_var_image = np.where(sky_a_ivar > 0, 1.0 / sky_a_ivar, np.inf).astype(np.float32) if sky_a_ivar is not None else None
+        sky_cf_var_image = None
+        sky_model = None
+
+    else:
+        # Model the sky in every fibre from the science frame's own sky bundle
+        sky_cs_image, sky_var_image, sky_cf_image, sky_cf_var_image, sky_model = model_sky_bundle(
+            sci_cs_image, sci_cf_image, sci_var_image, sky_bundle_mask, scale_continuum, work, log)
+        sky_a_ivar = None
+
+    # Scale and subtract the sky lines
+    lines = subtract_skylines(sci_cs_image, sky_cs_image, sci_var_image, sky_var_image, sky_bundle_mask, is_standard, work, log)
+    # Scale and subtract the sky continuum
+    cont = subtract_skycontinuum(sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image, sky_cf_var_image,
+                                 lines['scale_fiber'], sci_variance_image, sky_a_ivar, sky_bundle_mask, is_standard, work, log)
+
+    # Sky-subtracted science, without and with its continuum
+    sci_image = lines['subtracted']
+    sci_image_with_cont = sci_image + cont['subtracted']
+
+    # Add sky subtracted header key, noting whether continuum scaling was included
+    value = time.asctime(time.localtime())
+    if cont['applied'] or sky == 'sky_bundle':
+        comment = 'Image has been sky (line + continuum) subtracted'
+    elif is_standard:
+        comment = 'Image has been sky (line + continuum) subtracted; continuum scaling skipped for bright calibration standard'
+    elif work['sky_scaling']['continuum']['enable']:
+        comment = 'Image has been sky (line + continuum) subtracted; continuum scaling failed, used unscaled sky continuum'
+    else:
+        comment = 'Image has been sky (line + continuum) subtracted; continuum scaling disabled, used unscaled sky continuum'
+    hdu['Primary'].header['SKYSUB'] = (value, comment)
+
+    # Combine with the science exposure's own extraction variance -- final output is object-bundle only
+    variance_image_sky_sub = (sci_variance_image
+                               + crop_to_native_width(cont['variance'], sci_variance_image.shape[1])
+                               + crop_to_native_width(lines['variance'], sci_variance_image.shape[1]))
+    fiber_ids_obj = np.array(fiber_ids)[obj_bundle_mask]
+
+    # Diagnostic plots
+    sky_subtraction_plots(work, lines, cont, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image, sci_image_with_cont,
+                          sci_variance_image, variance_image_sky_sub, gpcnt_image, fiber_ids_obj, sky_bundle_mask, sky_model)
+
+    return (sci_image[obj_bundle_mask], sci_image_with_cont[obj_bundle_mask], lines['sky_scaled'][obj_bundle_mask],
+            cont['scaled'][obj_bundle_mask], variance_image_sky_sub[obj_bundle_mask], fiber_ids_obj)
+
+# ---------------------------------------------------------------------------- #
+def subtract_skylines(sci_cs_image, sky_cs_image, sci_var_image, sky_var_image, sky_bundle_mask, is_standard, work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    Scale the skylines to the science frame and subtract them.
+    '''
+    sky = work['sky_scaling']['sky']
+    obj_bundle_mask = ~sky_bundle_mask
+
     interline_mask = ~work['skyline_mask']
     if is_standard or not interline_mask.any():
         resid_skyline_mask = np.zeros_like(interline_mask)
     else:
         # flag columns with excess signal which are not already in the catalog mask
-        sky_resid = np.nanmedian(sky_cs_image[obj_bundle_mask], axis=0)
+        if sky == 'sky_frame':
+            sky_resid = np.nanmedian(sky_cs_image[obj_bundle_mask], axis=0)
+        else:
+            sky_resid = np.nanmedian(sci_cs_image[sky_bundle_mask], axis=0)
         resid_med = np.nanmedian(sky_resid[interline_mask])
         resid_sigma = mad_std(sky_resid[interline_mask], ignore_nan=True)
         resid_skyline_mask = (sky_resid - resid_med > work['sky_scaling']['residual_sigma'] * resid_sigma) & interline_mask
@@ -2108,23 +2352,21 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     interline_image_mask = line_mask.astype(np.float32)       # 1.0 on sky lines, 0.0 on interline
     fit_line_mask = line_mask & obj_bundle_mask[:, None]       # True on sky lines used to fit the scale, object-bundle fibres only
 
-    # Per-column (non-skyline) mask. This is same one used for object-bundle fiber continuum fits
-    continuum_interline_col = ~work['skyline_mask']
-
     # Residual sigma-clipping parameters for the sky-scale fit
     n_sigma = work['sky_scaling']['n_sigma']
     n_iter = work['sky_scaling']['n_iter']
 
-    # Sky exposure's IVAR
-    sky_var_image = np.where(sky_a_ivar > 0, 1.0 / sky_a_ivar, np.inf).astype(np.float32) if sky_a_ivar is not None else None
-    # Science exposure's IVAR
-    sci_var_image = align_native_width(sci_variance_image, sci_cs_image.shape[1]) if sci_variance_image is not None else None
-
-    # Scale the sky-frame sky lines onto the science-frame sky lines before subtracting
-    # wavelength-dependent scale (per column), fit across fibres
-    scale_wave = sky_scale_projection(sci_cs_image, sky_cs_image, fit_line_mask, axis=0, n_sigma=n_sigma, n_iter=n_iter, sci_var=sci_var_image, sky_var=sky_var_image)
-    # residual fibre-dependent scale (per row), fit across wavelengths on the wavelength-scaled sky
-    scale_fiber = sky_scale_projection(sci_cs_image, sky_cs_image * scale_wave[None, :], fit_line_mask, axis=1, n_sigma=n_sigma, n_iter=n_iter, sci_var=sci_var_image, sky_var=None if sky_var_image is None else sky_var_image * scale_wave[None, :] ** 2)
+    if sky == 'sky_frame':
+        # Wavelength-dependent scale (per column), fit across fibres
+        scale_wave, scale_wave_var = sky_scale_projection(sci_cs_image, sky_cs_image, fit_line_mask, axis=0, n_sigma=n_sigma, n_iter=n_iter, sci_var=sci_var_image, sky_var=sky_var_image)
+        # Residual fibre-dependent scale (per row), fit across wavelengths on the wavelength-scaled sky
+        scale_fiber, scale_fiber_var = sky_scale_projection(sci_cs_image, sky_cs_image * scale_wave[None, :], fit_line_mask, axis=1, n_sigma=n_sigma, n_iter=n_iter, sci_var=sci_var_image, sky_var=None if sky_var_image is None else sky_var_image * scale_wave[None, :] ** 2)
+    else:
+        # Fibre-dependent scale (per row), fit across wavelengths on the sky model, for every fibre
+        scale_fiber, scale_fiber_var = sky_scale_projection(sci_cs_image, sky_cs_image, line_mask, axis=1, n_sigma=n_sigma, n_iter=n_iter, sci_var=sci_var_image, sky_var=sky_var_image)
+        # No wavelength-dependent scale
+        scale_wave = np.ones(cols, dtype=np.float32)
+        scale_wave_var = np.zeros(cols, dtype=np.float32)
     # Combined separable scaling image (fibre x wavelength)
     scaling_image = scale_fiber[:, None] * scale_wave[None, :]
 
@@ -2139,107 +2381,216 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
 
     # Sky exposure's shot/read noise, scaled by the applied sky-line scale factor
     if sky_var_image is not None:
-        skyline_subtraction_variance = (scaling_image_masked ** 2) * sky_var_image
+        sky_noise_variance = (scaling_image_masked ** 2) * sky_var_image
     else:
-        skyline_subtraction_variance = np.zeros_like(sci_cs_image, dtype=np.float32)
+        sky_noise_variance = np.zeros_like(sci_cs_image, dtype=np.float32)
+    # Scale-fit uncertainty on the scaled sky lines
+    scaled = (interline_image_mask > 0) & (scaling_image >= 1e-2)
+    scaling_var = scale_fiber[:, None] ** 2 * scale_wave_var[None, :] + scale_wave[None, :] ** 2 * scale_fiber_var[:, None]
+    scale_fit_variance = np.where(scaled, sky_cs_image ** 2 * scaling_var, 0.).astype(np.float32)
 
-    # Scale sky-continuum in the sky frame up to the science frame, using ratio of sky-bundle median continuum fit
+    terms = {'sky noise': sky_noise_variance, 'line scales': scale_fit_variance}
+    # Residuals measured on the sky fibres, or on the object fibres' skyline columns for a sky frame
+    total_var = sci_var_image + sum(terms.values())
+    valid = (sci_cs_image != 0) & np.isfinite(sci_image) & np.isfinite(total_var) & (total_var > 0)
+    if sky == 'sky_frame':
+        rows, n_fit = obj_bundle_mask, 1
+        valid &= line_mask
+    else:
+        rows, n_fit = sky_bundle_mask, work['sky_scaling']['slit_profile_order'] + 1
+    relchi2 = skyline_relchi2(np.where(valid, sci_image, np.nan)[rows], total_var[rows], n_fit)
+    sky_noise = np.nan_to_num(np.nanmedian(np.where(valid, total_var, np.nan)[rows], axis=0))
+    # Variance raised so these residuals have a chi-square of 1
+    terms['skyline residual'] = (np.zeros_like(sci_cs_image) + ((relchi2 - 1) * sky_noise)[None, :]).astype(np.float32)
+
+    return {'subtracted': sci_image, 'sky_scaled': sky_cs_scaled, 'variance': sum(terms.values()),
+            'scale_wave': scale_wave, 'scale_fiber': scale_fiber, 'scaling': scaling_image_masked,
+            'line_mask': line_mask, 'interline_image_mask': interline_image_mask}
+
+# ---------------------------------------------------------------------------- #
+def subtract_skycontinuum(sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image, sky_cf_var_image, scale_fiber,
+                          sci_variance_image, sky_a_ivar, sky_bundle_mask, is_standard, work, log):
+# ---------------------------------------------------------------------------- #
+    '''
+    Scale the sky continuum to the science frame and subtract it.
+    '''
+    sky = work['sky_scaling']['sky']
     cfg = work['sky_scaling']['continuum']
-    sky_cf_image_scaled = sky_cf_image.copy()
-    is_bright_standard = any(trg_name.strip().upper().startswith(p.upper()) for p in cfg['skip_for_objects'])   # leaked starlight would inflate the ratio, not reflect real sky
-    continuum_scale_variance = np.zeros_like(sci_cf_image, dtype=np.float32)   # fit uncertainty on the continuum correction
+    obj_bundle_mask = ~sky_bundle_mask
+    # Per-column (non-skyline) mask. This is same one used for object-bundle fiber continuum fits
+    continuum_interline_col = ~work['skyline_mask']
     xarr = work['we']
 
-    # Mean sky-frame continuum for the object-bundle rows
-    sky_cf_obj_mean = sky_cf_image[obj_bundle_mask].mean(axis=0)
-    sci_cf_obj_mean = sci_cf_image[obj_bundle_mask].mean(axis=0)
+    sky_cf_image_scaled = sky_cf_image.copy()
+    # Variance terms of the sky continuum
+    terms = {}
 
     ratio = None
-    if cfg['enable'] and not is_bright_standard:
-        med_sci, med_sky, obj_fit_curve, sky_fit_curve, obj_fit_err, sky_fit_err, valid = fit_sky_bundle_continuum(
-            sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
-            sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log)
+    slit_factor = None
+    sky_factor = None
+    slit_used = None
+    cont_scale = None
+    fit_curves = None
+    scale_sky_cont = False
+    if cfg['enable'] and not is_standard and sky == 'sky_bundle':
+        # Sky-bundle continuum model scaled by each fibre's skyline scale
+        cont_scale, cont_scale_var, _ = fibre_scale_model(scale_fiber, obj_bundle_mask, work)
+        sky_cf_image_scaled = sky_cf_image * cont_scale[:, None]
+        terms['continuum model'] = np.nan_to_num(cont_scale[:, None] ** 2 * sky_cf_var_image).astype(np.float32)
+        terms['continuum scale'] = (sky_cf_image ** 2 * cont_scale_var[:, None]).astype(np.float32)
+        scale_sky_cont = True
 
-        if obj_fit_curve is not None and valid.any():
-            raw_sci_sky_bundle = (sci_cs_image + sci_cf_image)[sky_bundle_mask]
-            raw_sky_sky_bundle = (sky_cs_image + sky_cf_image)[sky_bundle_mask]
+    elif sky == 'sky_bundle':
+        # Sky-bundle continuum model, unscaled
+        terms['continuum model'] = np.nan_to_num(sky_cf_var_image).astype(np.float32)
 
-            ratio = (obj_fit_curve / sky_fit_curve).astype(np.float32)
-            # outside the valid range the fit extrapolates, unconstrained -- freeze at the nearest valid value
-            blue_idx, red_idx = np.flatnonzero(valid)[[0, -1]]
-            ratio[:blue_idx] = ratio[blue_idx]
-            ratio[red_idx + 1:] = ratio[red_idx]
+    else:
+        # Each fibre's sky-frame continuum-fit uncertainty, times the applied scale
+        cf_fit_var = continuum_fit_variance(sky_cs_image, sky_cf_image, work)
+        cont_factor = np.ones_like(sci_cf_image, dtype=np.float32)
 
-            sky_cf_image_scaled[obj_bundle_mask] = sky_cf_image[obj_bundle_mask] * ratio[None, :]
+        if cfg['enable'] and not is_standard:
+            med_sci, med_sky, obj_fit_curve, sky_fit_curve, obj_fit_err, sky_fit_err, valid = fit_sky_bundle_continuum(
+                sky_bundle_mask, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image,
+                sci_variance_image, sky_a_ivar, continuum_interline_col, xarr, cfg, work, log)
 
-            # fit uncertainty on the ratio
-            if obj_fit_err is not None and sky_fit_err is not None:
-                ratio_err = ratio * np.sqrt((obj_fit_err / obj_fit_curve)**2 + (sky_fit_err / sky_fit_curve)**2)
-                ratio_err[:blue_idx] = ratio_err[blue_idx]
-                ratio_err[red_idx + 1:] = ratio_err[red_idx]
-                continuum_scale_variance[obj_bundle_mask] = (sky_cf_image[obj_bundle_mask] * ratio_err[None, :])**2
+            if obj_fit_curve is not None and valid.any():
+                fit_curves = ((sci_cs_image + sci_cf_image)[sky_bundle_mask], (sky_cs_image + sky_cf_image)[sky_bundle_mask],
+                              med_sci, med_sky, obj_fit_curve, sky_fit_curve)
 
-    scale_sky_cont = ratio is not None
+                ratio = (obj_fit_curve / sky_fit_curve).astype(np.float32)
+                # outside the valid range the fit extrapolates, unconstrained -- freeze at the nearest valid value
+                blue_idx, red_idx = np.flatnonzero(valid)[[0, -1]]
+                ratio[:blue_idx] = ratio[blue_idx]
+                ratio[red_idx + 1:] = ratio[red_idx]
 
-    ceiling_frac = (sky_cf_image_scaled > sci_cf_image)[obj_bundle_mask].mean(axis=0)
-    floor_frac_arr = (sky_cf_image_scaled < 0)[obj_bundle_mask].mean(axis=0)
+                sky_cf_image_scaled[obj_bundle_mask] = sky_cf_image[obj_bundle_mask] * ratio[None, :]
+                cont_factor[obj_bundle_mask] = ratio[None, :]
 
-    if scale_sky_cont:
-        msg = ('   - sky continuum: scaled by sky-bundle ratio ({0:.1%} ceiling, '
-               '{1:.1%} floor)').format(ceiling_frac.mean(), floor_frac_arr.mean())
-    elif is_bright_standard:
-        msg = '   - sky continuum: scaling skipped for bright calibration standard ({0}). No scaling applied'.format(trg_name)
+                # fit uncertainty on the ratio
+                if obj_fit_err is not None and sky_fit_err is not None:
+                    ratio_err = ratio * np.sqrt((obj_fit_err / obj_fit_curve)**2 + (sky_fit_err / sky_fit_curve)**2)
+                    ratio_err[:blue_idx] = ratio_err[blue_idx]
+                    ratio_err[red_idx + 1:] = ratio_err[red_idx]
+                    terms['continuum ratio'] = np.zeros_like(sci_cf_image, dtype=np.float32)
+                    terms['continuum ratio'][obj_bundle_mask] = (sky_cf_image[obj_bundle_mask] * ratio_err[None, :])**2
+
+                # Slit factor from the sky fibres' continuum ratios
+                floor = cfg['continuum_floor']
+                good = (sci_cf_image > floor) & (sky_cf_image > floor) & continuum_interline_col[None, :]
+                fibre_ratio = np.where(good, sci_cf_image / np.where(good, sky_cf_image * ratio[None, :], 1.), np.nan)
+                sky_factor = np.full(sci_cf_image.shape[0], np.nan)
+                sky_factor[sky_bundle_mask] = np.nanmedian(fibre_ratio[sky_bundle_mask], axis=1)
+                slit_factor, slit_var, slit_used = fibre_scale_model(sky_factor, sky_bundle_mask, work)
+                sky_cf_image_scaled[obj_bundle_mask] *= slit_factor[obj_bundle_mask, None]
+                cont_factor[obj_bundle_mask] *= slit_factor[obj_bundle_mask, None]
+                if 'continuum ratio' in terms:
+                    terms['continuum ratio'][obj_bundle_mask] *= slit_factor[obj_bundle_mask, None] ** 2
+                terms['slit factor'] = np.zeros_like(sci_cf_image, dtype=np.float32)
+                terms['slit factor'][obj_bundle_mask] = (sky_cf_image[obj_bundle_mask] * ratio[None, :]) ** 2 * slit_var[obj_bundle_mask, None]
+
+        terms['continuum fit'] = (cont_factor ** 2 * cf_fit_var).astype(np.float32)
+
+    scale_sky_cont = scale_sky_cont or ratio is not None
+
+    # Add message to log
+    if ratio is not None:
+        msg = '   - sky continuum: scaled by sky-bundle ratio and slit factor'
+    elif scale_sky_cont:
+        msg = '   - sky continuum: sky-bundle model scaled by slit profile'
+    elif sky == 'sky_bundle':
+        msg = '   - sky continuum: sky-bundle model. No scaling applied'
+    elif is_standard:
+        msg = '   - sky continuum: scaling skipped for bright calibration standard. No scaling applied'
     elif cfg['enable']:
         msg = '   - sky continuum: too few valid sky-bundle fibers. No scaling applied'
     else:
         msg = '   - sky continuum: scaling disabled (enable=0). No scaling applied'
     log.message(msg, with_header=False)
 
-    # the sky continuum subtracted off can never exceed the science frame's own continuum, nor be negative
-    sky_cf_image_scaled = np.clip(sky_cf_image_scaled, 0, sci_cf_image)
+    # Subtracted sky continuum is non-negative
+    sky_cf_image_scaled = np.clip(sky_cf_image_scaled, 0, None)
 
-    # restores the science frame's own continuum, subtracting sky's continuum contribution
-    sci_image_with_cont = sci_image + (sci_cf_image - sky_cf_image_scaled)
+    variance = sum(terms.values()) if terms else np.zeros_like(sci_cf_image, dtype=np.float32)
+    return {'subtracted': sci_cf_image - sky_cf_image_scaled, 'scaled': sky_cf_image_scaled, 'variance': variance,
+            'applied': scale_sky_cont, 'ratio': ratio, 'slit_factor': slit_factor,
+            'sky_factor': sky_factor, 'slit_used': slit_used, 'cont_scale': cont_scale, 'fit_curves': fit_curves}
 
-    # Diagnostic plots of the skyline and sky-continuum correction terms and their effect on the subtraction
-    skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask)
-    skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=interline_image_mask, obj_bundle_mask=obj_bundle_mask)
-    if scale_sky_cont:
-        sky_cf_obj_mean_scaled = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
+# ---------------------------------------------------------------------------- #
+def sky_subtraction_plots(work, lines, cont, sci_cs_image, sci_cf_image, sky_cs_image, sky_cf_image, sci_image_with_cont,
+                          sci_variance_image, variance_image_sky_sub, gpcnt_image, fiber_ids_obj, sky_bundle_mask, sky_model=None):
+# ---------------------------------------------------------------------------- #
+    '''
+    Diagnostic plots of the skyline and sky-continuum subtraction.
+    '''
+    sky = work['sky_scaling']['sky']
+    obj_bundle_mask = ~sky_bundle_mask
+    rows, cols = sci_cs_image.shape
+    sci_image = lines['subtracted']
+    sky_cf_image_scaled = cont['scaled']
+    ratio, slit_factor, scale_sky_cont = cont['ratio'], cont['slit_factor'], cont['applied']
+    sci_cf_obj_mean = sci_cf_image[obj_bundle_mask].mean(axis=0)
+
+    # Skyline slit correction
+    if sky_model is not None:
+        skyline_slit_correction_plot(work, sci_cs_image, sky_model['cs_flat'], sky_model['model'], lines['scale_fiber'],
+                                     sky_model['windows'], sky_bundle_mask)
+
+    # Skyline correction terms and residuals
+    skyline_scaling_plots(work, lines['scale_wave'], lines['scale_fiber'], lines['scaling'], lines['line_mask'],
+                          sci_cs_image, sky_cs_image, lines['sky_scaled'], obj_bundle_mask)
+    skyline_residuals_plot(work, sci_cs_image_skysub=sci_image, skyline_mask=lines['interline_image_mask'], obj_bundle_mask=obj_bundle_mask)
+
+    # Sky-continuum correction
+    if ratio is not None:
+        raw_sci_sky_bundle, raw_sky_sky_bundle, med_sci, med_sky, obj_fit_curve, sky_fit_curve = cont['fit_curves']
         sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med_sci, med_sky,
-                                    obj_fit_curve, sky_fit_curve, ratio, sky_cf_obj_mean, sky_cf_obj_mean_scaled,
-                                    sci_cf_obj_mean)
-    else:
+                                    obj_fit_curve, sky_fit_curve, ratio, sky_cf_image[obj_bundle_mask].mean(axis=0),
+                                    sky_cf_image_scaled[obj_bundle_mask].mean(axis=0), sci_cf_obj_mean,
+                                    cont['sky_factor'], slit_factor, sky_bundle_mask, cont['slit_used'])
+    elif sky == 'sky_frame':
         sci_frame_fibers = (sci_cs_image + sci_cf_image)[obj_bundle_mask]
         sky_frame_fibers = (sky_cs_image + sky_cf_image)[obj_bundle_mask]
         valid = (sci_frame_fibers != 0) & (sky_frame_fibers != 0) & np.isfinite(sci_frame_fibers) & np.isfinite(sky_frame_fibers)
         has_cols = valid.any(axis=0)
         mean_sci = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
         mean_sky = np.zeros(sci_cf_image.shape[1], dtype=np.float32)
-        # mean (not median) to match sci_cf_obj_mean/sky_cf_obj_mean_capped -- same statistic, same raw flux these continua are averaged from
+        # Mean, to match the mean continua plotted with it
         mean_sci[has_cols] = np.nanmean(np.where(valid[:, has_cols], sci_frame_fibers[:, has_cols], np.nan), axis=0)
         mean_sky[has_cols] = np.nanmean(np.where(valid[:, has_cols], sky_frame_fibers[:, has_cols], np.nan), axis=0)
-        sky_cf_obj_mean_capped = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)   # reflects the ceiling applied above
-        sky_continuum_unscaled_plot(work, mean_sci, mean_sky, sci_cf_obj_mean, sky_cf_obj_mean_capped)
+        sky_cf_obj_mean = sky_cf_image_scaled[obj_bundle_mask].mean(axis=0)
+        sky_continuum_unscaled_plot(work, mean_sci, mean_sky, sci_cf_obj_mean, sky_cf_obj_mean)
 
-    # Add sky subtracted header key, noting whether continuum scaling was included
-    value = time.asctime(time.localtime())
-    if scale_sky_cont:
-        comment = 'Image has been sky (line + continuum) subtracted'
-    elif is_bright_standard:
-        comment = 'Image has been sky (line + continuum) subtracted; continuum scaling skipped for bright calibration standard'
-    elif cfg['enable']:
-        comment = 'Image has been sky (line + continuum) subtracted; continuum scaling failed, used unscaled sky continuum'
+    # 2D view of the sky-continuum steps: (title, [(image, rows, label, colour scale)])
+    all_rows = np.ones(rows, dtype=bool)
+    if sky == 'sky_frame':
+        steps = [('sky-bundle: continuum', [(sky_cf_image, sky_bundle_mask, 'sky frame', 'flux'),
+                                            (sci_cf_image, sky_bundle_mask, 'science frame', 'flux')])]
     else:
-        comment = 'Image has been sky (line + continuum) subtracted; continuum scaling disabled, used unscaled sky continuum'
-    hdu['Primary'].header['SKYSUB'] = (value, comment)
+        polyorder = 'polyorder: {0}'.format(work['sky_scaling']['slit_profile_order'])
+        steps = [('sky-bundle: continuum', [(sci_cf_image, sky_bundle_mask, 'science frame', 'flux'),
+                                            (sky_cf_image, all_rows, 'sky model: spec-channel fit ({0})'.format(polyorder), 'flux')])]
+    if ratio is not None:
+        cont_scale_image = ratio[None, :] * (slit_factor[:, None] if slit_factor is not None else np.ones((rows, 1)))
+        fit_cfg = work['continuum']['sky_bundle']
+        wave_order = fit_cfg['band_polyorder'][work['band']] if fit_cfg.get('band_polyorder') else fit_cfg['fit']['order']
+        label = 'wavelength (polyorder: {0}) & slit-profile (polyorder: {1}) fits'.format(
+            wave_order, work['sky_scaling']['slit_profile_order'])
+        steps.append(('object-bundle: temporal & fiber illumination scaling', [(cont_scale_image, obj_bundle_mask, label, 'scale')]))
+    elif sky == 'sky_bundle' and scale_sky_cont:
+        steps.append(('object-bundle: fiber illumination scaling', [(cont['cont_scale'][:, None] * np.ones((1, cols)), obj_bundle_mask,
+                                                                    'slit profile: skyline fit ({0})'.format(polyorder), 'scale')]))
+    if sky == 'sky_frame':
+        steps.append(('object-bundle: scaled sky continuum', [(sky_cf_image, obj_bundle_mask, 'unscaled', 'flux')]
+                      + ([(sky_cf_image_scaled, obj_bundle_mask, 'scaled', 'flux')] if scale_sky_cont else [])))
+    elif scale_sky_cont:
+        steps.append(('object-bundle: scaled sky continuum', [(sky_cf_image, obj_bundle_mask, 'sky model', 'flux'),
+                                                              (sky_cf_image_scaled, obj_bundle_mask, 'sky model x slit profile', 'flux')]))
+    steps.append(('object-bundle: continuum subtraction', [(sci_cf_image, obj_bundle_mask, 'before subtraction', 'flux'),
+                                                           (sci_cf_image - sky_cf_image_scaled, obj_bundle_mask, 'after subtraction', 'resid')]))
+    sky_continuum_2d_plot(work, steps)
 
-    # Combine with the science exposure's own extraction variance -- final output is object-bundle only
-    variance_image_sky_sub = (sci_variance_image
-                               + crop_to_native_width(continuum_scale_variance, sci_variance_image.shape[1])
-                               + crop_to_native_width(skyline_subtraction_variance, sci_variance_image.shape[1]))
-
-    # 1D diagnostic plots: 5 brightest + 5 faintest object-bundle fibers, through each sky-subtraction stage
+    # 1D diagnostic plots: 10 brightest object-bundle fibers, through each sky-subtraction stage
     n_native = sci_variance_image.shape[1]
     wave_native = work['we'][-n_native:]
     raw_flux_native = crop_to_native_width(sci_cs_image + sci_cf_image, n_native)[obj_bundle_mask]
@@ -2248,41 +2599,44 @@ def subtract_sky(hdu, sci_cf_image, sci_cs_image, sci_sf_image, sky_bundle_mask,
     skyline_flux_native = crop_to_native_width(sci_image + sci_cf_image, n_native)[obj_bundle_mask]
     final_flux_native = crop_to_native_width(sci_image_with_cont, n_native)[obj_bundle_mask]
     raw_variance_native = sci_variance_image[obj_bundle_mask]
-    skyline_variance_native = raw_variance_native + crop_to_native_width(skyline_subtraction_variance, n_native)[obj_bundle_mask]
+    skyline_variance_native = raw_variance_native + crop_to_native_width(lines['variance'], n_native)[obj_bundle_mask]
     final_variance_native = variance_image_sky_sub[obj_bundle_mask]
     gpcnt_native = gpcnt_image[obj_bundle_mask]
-    fiber_ids_obj = np.array(fiber_ids)[obj_bundle_mask]
 
     brightness = np.nanmedian(np.where(raw_flux_native > 0, raw_flux_native, np.nan), axis=1)
     order = np.argsort(np.where(np.isfinite(brightness), brightness, -np.inf))
-    faint_idx = order[:5]
-    bright_idx = order[-5:][::-1]
-    for rank_label, idx_list in (('faintest', faint_idx), ('brightest', bright_idx)):
-        for rank, i in enumerate(idx_list, start=1):
-            sky_subtraction_1d_diagnostic_plot(
-                work, fiber_ids_obj[i], '{0} {1}'.format(rank_label, rank), wave_native,
-                raw_flux_native[i], raw_variance_native[i],
-                sky_continuum_native[i], science_continuum_native[i],
-                skyline_flux_native[i], skyline_variance_native[i],
-                final_flux_native[i], final_variance_native[i],
-                gpcnt_native[i])
-
-    return (sci_image[obj_bundle_mask], sci_image_with_cont[obj_bundle_mask], sky_cs_scaled[obj_bundle_mask],
-            sky_cf_image_scaled[obj_bundle_mask], variance_image_sky_sub[obj_bundle_mask], fiber_ids_obj)
+    bright_idx = order[-10:][::-1]
+    for rank, i in enumerate(bright_idx, start=1):
+        sky_subtraction_1d_diagnostic_plot(
+            work, fiber_ids_obj[i], 'brightest {0}'.format(rank), wave_native,
+            raw_flux_native[i], raw_variance_native[i],
+            sky_continuum_native[i], science_continuum_native[i],
+            skyline_flux_native[i], skyline_variance_native[i],
+            final_flux_native[i], final_variance_native[i],
+            gpcnt_native[i], 'sky-continuum scaled' if scale_sky_cont else 'sky continuum')
 
 
 # ---------------------------------------------------------------------------- #
 def sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med_sci, med_sky,
                                 obj_fit_curve, sky_fit_curve, ratio, sky_cf_obj_mean, sky_cf_obj_mean_scaled,
-                                sci_cf_obj_mean):
+                                sci_cf_obj_mean, sky_factor=None, slit_factor=None, sky_bundle_mask=None, slit_used=None):
 # ---------------------------------------------------------------------------- #
-    '''
-    sky-bundle fibres and their continuum fits (science vs sky exposure), the ratio correction
-    applied, and the resulting object-bundle sky-continuum subtraction: sky-frame continuum
-    before/after scaling, the science frame's own continuum, and what remains once the scaled
-    sky continuum is subtracted from it.
-    '''
-    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(8, 11), sharex=True, gridspec_kw={'hspace': 0.3})
+    # Panels in the order the steps are applied
+    slit_step = slit_factor is not None
+    if slit_step:
+        fig = plt.figure(figsize=(8, 13.75))
+        gs = fig.add_gridspec(3, 1, height_ratios=[3, 1, 1], hspace=0.55)
+        gs_wave = gs[0].subgridspec(3, 1, hspace=0.42)
+        ax1 = fig.add_subplot(gs_wave[0])
+        ax2, ax3 = (fig.add_subplot(gs_wave[i], sharex=ax1) for i in (1, 2))
+        ax4 = fig.add_subplot(gs[2], sharex=ax1)
+    else:
+        fig = plt.figure(figsize=(8, 11))
+        gs = fig.add_gridspec(4, 1, hspace=0.3)
+        ax1 = fig.add_subplot(gs[0])
+        ax2, ax3, ax4 = (fig.add_subplot(gs[i], sharex=ax1) for i in (1, 2, 3))
+    for ax in ((ax1, ax2) if slit_step else (ax1, ax2, ax3)):
+        plt.setp(ax.get_xticklabels(), visible=False)
 
     wave = work['we']
 
@@ -2317,12 +2671,34 @@ def sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med
 
     ax3.step(wave, ratio, where='mid', color='black', lw=0.8)
     ax3.set_ylabel('scale factor', fontsize=14, labelpad=15)
-    ax3.set_title('ratio', fontsize=15, pad=13)
+    ax3.set_title('wavelength-dependent scaling', fontsize=15, pad=13)
+
+    if slit_step:
+        ax3.set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
+        ax5 = fig.add_subplot(gs[1])
+        slit = work['slit_pos']
+        order = np.argsort(slit)
+        for x in slit[sky_bundle_mask]:
+            ax5.axvline(x, color='grey', ls='--', lw=0.6, alpha=0.3)
+        ax5.axhline(1.0, color='grey', ls='dashed', lw=0.8)
+        clipped = sky_bundle_mask & ~slit_used & np.isfinite(sky_factor)
+        ax5.scatter(slit[slit_used], sky_factor[slit_used], s=14, color='tab:blue', label='median (science / wave-scaled sky)')
+        if clipped.any():
+            ax5.scatter(slit[clipped], sky_factor[clipped], s=14, facecolors='none', edgecolors='tab:blue', label='clipped')
+        ax5.plot(slit[order], slit_factor[order], color='black', lw=1.3,
+                 label='poly order: {0}'.format(work['sky_scaling']['slit_profile_order']))
+        ax5.set_xlabel('slit position [pixel]', fontsize=15, labelpad=15)
+        ax5.set_ylabel('scale factor', fontsize=14, labelpad=15)
+        ax5.set_title('slit-profile dependent scaling', fontsize=15, pad=13)
+        ymin, ymax = ax5.get_ylim()
+        ax5.set_ylim(ymin, ymax + 0.4 * (ymax - ymin))
+        ax5.legend(fontsize=10, loc='upper right', ncol=2)
 
     subtracted_sci_cf = sci_cf_obj_mean - sky_cf_obj_mean_scaled
     ax4.axhline(0, color='grey', ls='dashed', lw=0.8)
     ax4.step(wave, sky_cf_obj_mean, where='mid', color='grey', lw=1.0, ls='dashed', label='unscaled sky')
-    ax4.step(wave, sky_cf_obj_mean_scaled, where='mid', color='grey', lw=1.0, label='scaled sky')
+    ax4.step(wave, sky_cf_obj_mean_scaled, where='mid', color='grey', lw=1.0,
+             label='scaled sky' if slit_step else 'wave-scaled sky')
     ax4.step(wave, sci_cf_obj_mean, where='mid', color='black', lw=2, ls='dashed', label='raw science')
     ax4.step(wave, subtracted_sci_cf, where='mid', color='black', lw=2, label='subtracted science')
     ax4.set_ylabel('counts / s', fontsize=14, labelpad=15)
@@ -2342,13 +2718,67 @@ def sky_continuum_scaling_plot(work, raw_sci_sky_bundle, raw_sky_sky_bundle, med
     return
 
 # ---------------------------------------------------------------------------- #
+def sky_continuum_2d_plot(work, steps):
+# ---------------------------------------------------------------------------- #
+    cmap = LinearSegmentedColormap.from_list('custom_pastel', ['#a1434d', '#ffffba'])
+    cmap.set_bad('white')
+    wave = work['we']
+    valid = work['image_mask']
+    units = {'flux': 'counts / s', 'resid': 'counts / s', 'scale': 'scale factor'}
+
+    n_fibre = valid.shape[0]
+    x_edges = np.concatenate([[1.5 * wave[0] - 0.5 * wave[1]], 0.5 * (wave[1:] + wave[:-1]), [1.5 * wave[-1] - 0.5 * wave[-2]]])
+    y_edges = np.arange(n_fibre + 1) - 0.5   # one row per fibre #
+
+    # Colour limits shared by all images of the same scale
+    values = {}
+    for _, panels in steps:
+        for image, rows, _, scale in panels:
+            shown = np.where(valid & rows[:, None], image, np.nan)
+            values.setdefault(scale, []).append(shown[np.isfinite(shown)])
+    limits = {}
+    for scale, v in values.items():
+        v = np.concatenate(v)
+        if v.size == 0:
+            limits[scale] = (0., 1.)
+        elif scale == 'resid':
+            a = np.percentile(np.abs(v), 99)
+            limits[scale] = (-a, a)
+        else:
+            limits[scale] = tuple(np.percentile(v, [1, 99]))
+
+    fig = plt.figure(figsize=(10, 2.6 * len(steps)))
+    gs = fig.add_gridspec(len(steps), 1, hspace=0.45)
+    axes = []
+    for k, (title, panels) in enumerate(steps):
+        sub = gs[k].subgridspec(len(panels), 1, hspace=0.06)
+        for j, (image, rows, label, scale) in enumerate(panels):
+            ax = fig.add_subplot(sub[j], sharex=axes[0] if axes else None)
+            shown = np.where(valid & rows[:, None], image, np.nan)
+            mesh = ax.pcolormesh(x_edges, y_edges, shown, cmap=cmap,
+                                 vmin=limits[scale][0], vmax=limits[scale][1], rasterized=True)
+            ax.text(0.01, 0.9, label, transform=ax.transAxes, fontsize=10, va='top',
+                    bbox=dict(facecolor='white', alpha=0.8, lw=0))
+            cax = make_axes_locatable(ax).append_axes('right', size='2.5%', pad=0.1)
+            cb = plt.colorbar(mesh, cax=cax)
+            cb.set_label(units[scale], fontsize=9)
+            cb.ax.tick_params(labelsize=8)
+            if j == 0:
+                ax.set_title(title, fontsize=15, pad=10)
+            axes.append(ax)
+    for ax in axes[:-1]:
+        plt.setp(ax.get_xticklabels(), visible=False)
+    axes[-1].set_xlim(wave[0], wave[-1])
+    axes[-1].set_xlabel(r'Wavelength [$\AA$]', fontsize=15, labelpad=15)
+    fig.supylabel('fiber #', fontsize=15)
+
+    stub = os.path.join(get_plot_dir(work, 'sky_subtraction'), work['file'])
+    fig.savefig(stub + '_sky_continuum_subtraction_2D.png', dpi=180, format='png', bbox_inches='tight')
+    plt.close(fig)
+
+# ---------------------------------------------------------------------------- #
 def sky_continuum_unscaled_plot(work, mean_sci, mean_sky, sci_cf_mean, sky_cf_mean):
 # ---------------------------------------------------------------------------- #
-    '''
-    object-bundle mean continuum (science vs sky frame), and the resulting
-    continuum after subtracting them -- for when sky-bundle ratio scaling
-    is disabled or unavailable.
-    '''
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 5.5), sharex=True, gridspec_kw={'hspace': 0.3})
 
     wave = work['we']
@@ -2380,15 +2810,9 @@ def sky_continuum_unscaled_plot(work, mean_sci, mean_sky, sci_cf_mean, sky_cf_me
 
     return
 
-
 # ---------------------------------------------------------------------------- #
 def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, science_spectral_sum_arr):
 # ---------------------------------------------------------------------------- #
-    '''
-    plotting the summed skylines vs. fiber # for both science and sky cs frames.
-    the science-to-sky ratio of these summed skylines is used as a fiber-dependent scale factor in the sky-subtraction step.
-    '''
-
     n_fibres = sky_spectral_sum_arr.shape[0]
     fibre_idx = np.arange(n_fibres)
 
@@ -2413,24 +2837,41 @@ def sky_line_sum_diagnostic_plot(work, sky_spectral_sum_arr, science_spectral_su
     return
 
 # ---------------------------------------------------------------------------- #
+def skyline_slit_correction_plot(work, sci_cs_image, cs_flat, sky_model, scale_fiber, windows, sky_bundle_mask):
+# ---------------------------------------------------------------------------- #
+    slit = work['slit_pos']
+    obj = ~sky_bundle_mask
+    sky_color, obj_color = '#6399bb', '#ffa55a'
+
+    # Strong-skyline flux per fibre, over channels valid in every fibre
+    chans = np.concatenate(windows)
+    chans = chans[np.all(np.isfinite(sci_cs_image[:, chans]) & np.isfinite(sky_model[:, chans]), axis=0)]
+    raw_flux = sci_cs_image[:, chans].sum(axis=1)
+    sky_flat_flux = np.nansum(cs_flat[:, chans], axis=1)
+    obj_scaled_flux = raw_flux / scale_fiber
+    model_flux = sky_model[:, chans].sum(axis=1)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for x in slit[sky_bundle_mask]:
+        ax.axvline(x, color='grey', ls='--', lw=0.6, alpha=0.3)
+    order = np.argsort(slit)
+    ax.scatter(slit[sky_bundle_mask], raw_flux[sky_bundle_mask], s=14, color=sky_color, alpha=0.3, label='sky-bundle')
+    ax.scatter(slit[obj], raw_flux[obj], s=14, color=obj_color, alpha=0.3, label='object-bundle')
+    ax.scatter(slit[sky_bundle_mask], sky_flat_flux[sky_bundle_mask], s=14, color=sky_color, label='sky-bundle / (sky-bundle / median)')
+    ax.scatter(slit[obj], obj_scaled_flux[obj], s=14, color=obj_color, label='object-bundle / (object-bundle / sky model)')
+    ax.plot(slit[order], model_flux[order], color='#2c5d7c', lw=1.5, label='sky model')
+    ax.set_xlabel('slit position [pixel]', fontsize=15, labelpad=15)
+    ax.set_ylabel('strong-skyline flux [counts / s]', fontsize=15, labelpad=15)
+    ax.set_title('skyline slit correction', fontsize=15, pad=15)
+    ax.legend(fontsize=11, ncol=3)
+
+    stub = os.path.join(get_plot_dir(work, 'sky_subtraction'), work['file'])
+    fig.savefig(stub + '_skyline_slit_correction.png', dpi=180, format='png', bbox_inches='tight')
+    plt.close(fig)
+
+# ---------------------------------------------------------------------------- #
 def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, line_mask, sci_cs_image, sky_cs_image, sky_cs_scaled, obj_bundle_mask):
 # ---------------------------------------------------------------------------- #
-    '''
-    Diagnostic plots for the residual-minimising skyline scaling.
-
-    Three figures:
-
-      1. {file}_skyline_scaling_wavelength.png
-         Wavelength-dependent scale term scale_wave (per spectral channel, fit across fibres),
-         shown only where sky lines exist, with the count of skyline pixels per channel.
-
-      2. {file}_skyline_scaling_fiber.png
-         Fibre-dependent scale term scale_fiber (per fibre, fit across wavelengths on the wavelength-scaled sky),
-         object-bundle fibres only.
-
-      3. {file}_skyline_subtraction.png
-         The applied combined scale (scale_fiber x scale_wave)
-    '''
     from matplotlib.colors import LinearSegmentedColormap
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 
@@ -2464,44 +2905,47 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
                 cb.set_label(label, fontsize=10)
         return cax
  
-    # ------------------------------------------------------------------ #
-    # 1) wavelength-dependent scale term (scale_wave)
-    # ------------------------------------------------------------------ #
-    # only meaningful on channels that carry sky lines -> break the line elsewhere
-    scale_wave_plot = np.where(n_line_per_chan > 0, scale_wave, np.nan)
- 
-    fig, axs = plt.subplots(2, 1, figsize=(10, 5), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [3, 1]})
- 
-    axs[0].scatter(chan_idx, scale_wave_plot, s=5, color='black')
-    axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
-    axs[0].set_ylabel('scale factor', fontsize=12, labelpad=10)
-    axs[0].set_title('wavelength-dependent skyline scale', fontsize=15, pad=15)
-    axs[1].fill_between(chan_idx, 0, n_line_per_chan, step='mid', color='grey', alpha=0.3)
-    axs[1].set_ylabel('# of skyline\npixels', fontsize=11, labelpad=10)
-    axs[1].set_xlabel('spectral channel', fontsize=14, labelpad=10)
-    axs[1].set_xlim(0, n_chan)
- 
-    fig.savefig(stub + '_skyline_scaling_wavelength.png', dpi=180, format='png', bbox_inches='tight')
-    plt.close(fig)
- 
-    # ------------------------------------------------------------------ #
-    # 2) fibre-dependent scale term (scale_fiber) -- object-bundle fibres only
-    # ------------------------------------------------------------------ #
-    obj_fibre_idx = fibre_idx[obj_bundle_mask]
-    scale_fiber_plot = np.where(n_line_per_fibre > 0, scale_fiber, np.nan)[obj_bundle_mask]
+    # Scale terms, sky frame only
+    if work['sky_scaling']['sky'] == 'sky_frame':
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+        # ------------------------------------------------------------------ #
+        # 1) wavelength-dependent scale term (scale_wave)
+        # ------------------------------------------------------------------ #
+        # only meaningful on channels that carry sky lines -> break the line elsewhere
+        scale_wave_plot = np.where(n_line_per_chan > 0, scale_wave, np.nan)
 
-    ax.plot(obj_fibre_idx, scale_fiber_plot, lw=1.2, color='k')
-    ax.axhline(1.0, color='r', lw=0.8, ls='--')
-    ax.set_ylabel('scale factor', fontsize=12, labelpad=10)
-    ax.set_title('fibre-dependent skyline scale', fontsize=14, pad=15)
-    ax.set_xlabel('fiber #', fontsize=12, labelpad=12)
-    ax.set_xlim(0, n_fibre - 1)
+        fig, axs = plt.subplots(2, 1, figsize=(10, 5), sharex=True, gridspec_kw={'hspace': 0, 'height_ratios': [3, 1]})
 
-    fig.savefig(stub + '_skyline_scaling_fiber.png', dpi=180, format='png', bbox_inches='tight')
-    plt.close(fig)
- 
+        axs[0].scatter(chan_idx, scale_wave_plot, s=5, color='black')
+        axs[0].axhline(1.0, color='r', lw=0.8, ls='--')
+        axs[0].set_ylabel('scale factor', fontsize=12, labelpad=10)
+        axs[0].set_title('wavelength-dependent skyline scale', fontsize=15, pad=15)
+        axs[1].fill_between(chan_idx, 0, n_line_per_chan, step='mid', color='grey', alpha=0.3)
+        axs[1].set_ylabel('# of skyline\npixels', fontsize=11, labelpad=10)
+        axs[1].set_xlabel('spectral channel', fontsize=14, labelpad=10)
+        axs[1].set_xlim(0, n_chan)
+
+        fig.savefig(stub + '_skyline_scaling_wavelength.png', dpi=180, format='png', bbox_inches='tight')
+        plt.close(fig)
+
+        # ------------------------------------------------------------------ #
+        # 2) fibre-dependent scale term (scale_fiber) -- object-bundle fibres only
+        # ------------------------------------------------------------------ #
+        obj_fibre_idx = fibre_idx[obj_bundle_mask]
+        scale_fiber_plot = np.where(n_line_per_fibre > 0, scale_fiber, np.nan)[obj_bundle_mask]
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+
+        ax.plot(obj_fibre_idx, scale_fiber_plot, lw=1.2, color='k')
+        ax.axhline(1.0, color='r', lw=0.8, ls='--')
+        ax.set_ylabel('scale factor', fontsize=12, labelpad=10)
+        ax.set_title('fibre-dependent skyline scale', fontsize=14, pad=15)
+        ax.set_xlabel('fiber #', fontsize=12, labelpad=12)
+        ax.set_xlim(0, n_fibre - 1)
+
+        fig.savefig(stub + '_skyline_scaling_fiber.png', dpi=180, format='png', bbox_inches='tight')
+        plt.close(fig)
+
     # ------------------------------------------------------------------ #
     # 3) combined applied scale + before / after sky subtraction
     # ------------------------------------------------------------------ #
@@ -2554,11 +2998,6 @@ def skyline_scaling_plots(work, scale_wave, scale_fiber, scaling_image_masked, l
 # ---------------------------------------------------------------------------- #
 def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask, obj_bundle_mask):
 # ---------------------------------------------------------------------------- #
-    '''
-    plotting the residual intensity of all skylines for each fiber in the science frame after subtraction.
-    These skylines are identified with the sky-fit images and meet the set threshold value.
-    '''
-
     # residual flux in skyline regions of science image
     sci_skyline_region_flux = sci_cs_image_skysub * skyline_mask
 
@@ -2599,10 +3038,10 @@ def skyline_residuals_plot(work, sci_cs_image_skysub, skyline_mask, obj_bundle_m
 # ---------------------------------------------------------------------------- #
 def sky_subtraction_1d_diagnostic_plot(work, fiber_id, rank_label, wave, raw_flux, raw_var,
                                         sky_continuum_fit, science_continuum_fit,
-                                        skyline_flux, skyline_var, final_flux, final_var, gpm_per_col):
+                                        skyline_flux, skyline_var, final_flux, final_var, gpm_per_col, sky_continuum_label):
 # ---------------------------------------------------------------------------- #
     '''
-    Sky subtraction products for 5 brightest and 5 faintest 1D-fiber spectra.
+    Sky subtraction products for 10 brightest 1D-fiber spectra.
     '''
     fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(10, 11), sharex=True,
                                               gridspec_kw={'height_ratios': [3, 3, 3, 1], 'hspace': 0.3})
@@ -2642,7 +3081,7 @@ def sky_subtraction_1d_diagnostic_plot(work, fiber_id, rank_label, wave, raw_flu
             ax.axhline(y, color='grey', ls='dashed', lw=0.5, alpha=0.4, zorder=0)
         if ax is ax2:
             ax.plot(wave, sky_continuum_fit, color='#7EC8BC', ls='dashed', alpha=0.95, lw=1.5,
-                    zorder=1, label='sky-continuum scaled')
+                    zorder=1, label=sky_continuum_label)
             ax.plot(wave, science_continuum_fit, color='#F25F5C', ls='dashed', alpha=0.95, lw=1.5,
                     zorder=1, label='science continuum fit')
             ax.legend(fontsize=10, loc='upper right')
