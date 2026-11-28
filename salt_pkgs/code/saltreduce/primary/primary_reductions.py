@@ -161,7 +161,7 @@ def flat_group_key(filename):
 # observation log
 # --------------------------------------------------------------------------- #
 
-def generate_obs_log_fits(obs_date, prefix='dph', no_sky_exp=False):
+def generate_obs_log_fits(obs_date, prefix='dph'):
     """
     Build N{date}OBSLOG.fits automatically from the raw frames
     Each {prefix}N{date}*reduced.fits frame is typed from its headers EXPTYPE and OBJECT.
@@ -195,12 +195,12 @@ def generate_obs_log_fits(obs_date, prefix='dph', no_sky_exp=False):
                                   'obj': str(obj),
                                   'exp': exposure_number(store)})
 
-    # if there are no Sky exposures and user did not pass no_sky_exp flag, raise an error
-    if (n_expsky == 0) and not no_sky_exp:
-        raise RuntimeError(f'No "Sky" EXPTYPE found for files in {obs_date}. If expecting sky frames, rename data using EXPTYPE in PRIMARY header. If not, set --no_sky_exp flag.')
-    else:
-        for fr in object_frames:
-            rows.append(('Science', fr['store']))
+    # no Sky exposures: science frames use their own sky bundle
+    if n_expsky == 0:
+        print(f'   - WARNING: no "Sky" EXPTYPE found for files in {obs_date}; science frames use sky-bundle subtraction. '
+              f'If expecting sky frames, rename data using EXPTYPE in PRIMARY header.')
+    for fr in object_frames:
+        rows.append(('Science', fr['store']))
 
     df = pd.DataFrame(rows, columns=['OBSTYPE', 'FILENAME'])
     print(f"   - {len(df)} files in OBSLOG fits  {df['OBSTYPE'].value_counts().to_dict()}")
@@ -353,12 +353,12 @@ def dark_subtract_all(obs_date, prefix):
 # Running primary reductions
 # --------------------------------------------------------------------------- #
 
-def run(obs_date, prefix='dph', skip=(), no_sky_exp=False):
+def run(obs_date, prefix='dph', skip=()):
 
     if 'obslog' not in skip:
         print('\nobservation log\n')
         try:
-            generate_obs_log_fits(obs_date, prefix=prefix, no_sky_exp=no_sky_exp)
+            generate_obs_log_fits(obs_date, prefix=prefix)
         except Exception as e:
             raise RuntimeError(f'ERROR building obs log: \n{e}')
 
@@ -378,15 +378,13 @@ def run(obs_date, prefix='dph', skip=(), no_sky_exp=False):
 def main():
     p = argparse.ArgumentParser(description='primary-reductions')
     p.add_argument('obs_date', help='observation date, e.g. 20240701')
-    p.add_argument('--no_sky_exp', action='store_true', help='reduction continues if no sky exposures are found')
     p.add_argument('--skip', nargs='*', default=[],
                        choices=['obslog', 'darks', 'flats', 'darksub'],
                        help='steps to skip')
     args = p.parse_args()
 
     run(obs_date=args.obs_date,
-        skip=args.skip,
-        no_sky_exp=args.no_sky_exp)
+        skip=args.skip)
 
 
 if __name__ == '__main__':
